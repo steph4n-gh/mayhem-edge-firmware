@@ -272,6 +272,9 @@ void SGPIO::init() {
     peripheral_reset(&sgpio_resources.reset);
 }
 
+#if defined(HACKRF_EDGE_PRECISION_RX_RATE_TRANSACTION_DIAGNOSTIC)
+__attribute__((noinline, noclone, optimize("Os")))
+#endif
 void SGPIO::configure(const Direction direction) {
     disable_all_slice_counters();
 

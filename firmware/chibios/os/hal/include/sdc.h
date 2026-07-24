@@ -51,6 +51,7 @@
 #define SDC_MODE_CARDTYPE_SDV20         1       /**< @brief Card is SD V2.0.*/
 #define SDC_MODE_CARDTYPE_MMC           2       /**< @brief Card is MMC.    */
 #define SDC_MODE_HIGH_CAPACITY          0x10    /**< @brief High cap.card.  */
+#define SDC_MODE_HIGH_SPEED             0x20    /**< @brief CMD6 High Speed.*/
 /** @} */
 
 /**

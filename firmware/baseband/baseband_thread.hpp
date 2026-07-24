@@ -40,6 +40,9 @@ class BasebandThread : public ThreadBase {
         uint32_t sampling_rate,
         BasebandProcessor* const baseband_processor,
         baseband::Direction direction,
+#if defined(HACKRF_EDGE_PRECISION_RX_DMA_LEASE_DIAGNOSTIC)
+        baseband::sample_t* precision_rx_dma_loan,
+#endif
         bool auto_start = true,
         tprio_t priority = (NORMALPRIO + 20));
     ~BasebandThread();
@@ -58,13 +61,35 @@ class BasebandThread : public ThreadBase {
     }
 
     void set_sampling_rate(uint32_t new_sampling_rate);
+#if defined(HACKRF_EDGE_PRECISION_RX_DMA_LEASE_DIAGNOSTIC)
+    bool set_precision_rx_capture_geometry(bool capture);
+#endif
+#if defined(HACKRF_EDGE_PRECISION_RX_RATE_TRANSACTION_DIAGNOSTIC)
+    bool prepare_precision_rx_rate_change();
+    bool resume_precision_rx_rate_change();
+    bool precision_rx_rate_pause_armed() const;
+    bool precision_rx_rate_paused() const;
+    bool precision_rx_dma_faulted_locked() const;
+    bool precision_rx_dma_faulted() const;
+    bool begin_precision_rx_rate_state_update() const;
+    void end_precision_rx_rate_state_update() const;
+    bool precision_rx_worker_quiesced() const;
+    void fail_close_precision_rx();
+#endif
 
    private:
     static Thread* thread;
+#if defined(HACKRF_EDGE_PRECISION_RX_RATE_TRANSACTION_DIAGNOSTIC)
+    static bool precision_rx_worker_quiesced_;
+    static void publish_precision_rx_worker_quiesced(bool quiesced);
+#endif
 
     BasebandProcessor* baseband_processor_;
     baseband::Direction direction_;
     uint32_t sampling_rate_;
+#if defined(HACKRF_EDGE_PRECISION_RX_DMA_LEASE_DIAGNOSTIC)
+    baseband::sample_t* precision_rx_dma_loan_;
+#endif
     const tprio_t priority_;
 
     void run() override;

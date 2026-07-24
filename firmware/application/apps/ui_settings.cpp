@@ -59,6 +59,10 @@ namespace fs = std::filesystem;
 
 #include "file_reader.hpp"
 
+#if defined(HACKRF_EDGE_SD_CMD6_DIAGNOSTIC)
+#include "hal.h"
+#endif
+
 extern ui::SystemView* system_view_ptr;
 
 namespace pmem = portapack::persistent_memory;
@@ -452,18 +456,28 @@ SetSDCardView::SetSDCardView(NavigationView& nav) {
                   &text_filesystem_type,
                   &button_more_info,
                   &labels,
+#if defined(HACKRF_EDGE_SD_CMD6_DIAGNOSTIC) || \
+    defined(HACKRF_EDGE_SD_SAFE_DEFAULT_SPEED)
+                  &text_sdcard_bus_mode,
+#else
                   &checkbox_sdcard_speed,
                   &button_test_sdcard_high_speed,
                   &text_sdcard_test_status,
                   &button_save,
+#endif
                   &button_cancel});
 
+#if !defined(HACKRF_EDGE_SD_CMD6_DIAGNOSTIC) && \
+    !defined(HACKRF_EDGE_SD_SAFE_DEFAULT_SPEED)
     checkbox_sdcard_speed.set_value(pmem::config_sdcard_high_speed_io());
+#endif
 
     button_more_info.on_select = [&nav, this](Button&) {
         nav.push<SDCardDebugView>();
     };
 
+#if !defined(HACKRF_EDGE_SD_CMD6_DIAGNOSTIC) && \
+    !defined(HACKRF_EDGE_SD_SAFE_DEFAULT_SPEED)
     button_test_sdcard_high_speed.on_select = [&nav, this](Button&) {
         pmem::set_config_sdcard_high_speed_io(true, false);
         text_sdcard_test_status.set("!! HIGH SPEED MODE ON !!");
@@ -474,6 +488,7 @@ SetSDCardView::SetSDCardView(NavigationView& nav) {
         send_system_refresh();
         nav.pop();
     };
+#endif
 
     button_cancel.on_select = [&nav, this](Button&) {
         nav.pop();
@@ -554,6 +569,29 @@ void SetSDCardView::update_sd_card_status() {
             text_filesystem_type.set("---");
             break;
     }
+
+#if defined(HACKRF_EDGE_SD_CMD6_DIAGNOSTIC)
+    if (status == Status::Mounted) {
+        const auto outcome =
+            SDCD1_cmd6_diagnostic.flags & SDC_CMD6_DIAG_OUTCOME_MASK;
+        const char* const bus_mode =
+            (SDCD1.cardmode & SDC_MODE_HIGH_SPEED)
+                ? "50 MHz - VERIFIED"
+            : outcome == SDC_CMD6_DIAG_OUTCOME(SDC_CMD6_NEGOTIATION_UNSUPPORTED)
+                ? "25 MHz - UNSUPPORTED"
+            : outcome == SDC_CMD6_DIAG_OUTCOME(SDC_CMD6_NEGOTIATION_RECOVERED)
+                ? "25 MHz - RECOVERED"
+            : outcome == SDC_CMD6_DIAG_OUTCOME(SDC_CMD6_NEGOTIATION_BUSY)
+                ? "25 MHz - BUSY"
+                : "25 MHz - ERROR";
+        text_sdcard_bus_mode.set(bus_mode);
+    } else {
+        text_sdcard_bus_mode.set("---");
+    }
+#elif defined(HACKRF_EDGE_SD_SAFE_DEFAULT_SPEED)
+    text_sdcard_bus_mode.set(
+        status == Status::Mounted ? "25 MHz - SAFE" : "---");
+#endif
 }
 
 /* SetConverterSettingsView ******************************/

@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2023 Mark Thompson
+ * Modified for HackRF Edge in 2026 by HackRF Edge contributors.
  *
  * This file is part of PortaPack.
  *
@@ -71,6 +72,7 @@ class FileConvertWriter : public stream::Writer {
     Optional<File::Error> create(const std::filesystem::path& filename);
 
     File::Result<File::Size> write(const void* const buffer, const File::Size bytes) override;
+    Optional<File::Error> sync() override { return file_.sync(); }
     const File& file() const& { return file_; }
 
     bool convert_c16_to_c8{};

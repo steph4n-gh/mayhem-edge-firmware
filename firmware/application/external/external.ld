@@ -1,6 +1,7 @@
 /*
     Copyright (C) 2023 Bernd Herzog
     Copyright (C) 2024 Mark Thompson
+    Modified for HackRF Edge in 2026 by HackRF Edge contributors.
 
     Licensed under the Apache License, Version 2.0 (the "License");
     you may not use this file except in compliance with the License.
@@ -115,6 +116,7 @@ MEMORY
     ram_external_app_vor_tx                (rwx) : org = 0xAE0A0000, len = 32k
     ram_external_app_signal_hunter         (rwx) : org = 0xAE0B0000, len = 32k
     ram_external_app_tetra_rx              (rwx) : org = 0xAE0C0000, len = 32k
+    ram_external_app_precision_rx          (rwx) : org = 0xAE0D0000, len = 32k
 }
 
 SECTIONS
@@ -670,6 +672,18 @@ SECTIONS
         KEEP(*(.external_app.app_tetra_rx.application_information));
         *(*ui*external_app*tetra_rx*);
     } > ram_external_app_tetra_rx
+
+    /*
+     * CMake copies either the empty legacy dispatcher or the p12-only bounded
+     * auxiliary output section into the build directory under this name.
+     */
+    INCLUDE precision_rx_aux_dispatch.ld
+
+    .external_app_precision_rx : ALIGN(4) SUBALIGN(4)
+    {
+        KEEP(*(.external_app.app_precision_rx.application_information));
+        *(*ui*external_app*precision_rx*);
+    } > ram_external_app_precision_rx
 
 
 

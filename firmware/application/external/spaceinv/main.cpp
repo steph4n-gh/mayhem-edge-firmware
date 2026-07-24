@@ -23,7 +23,7 @@ __attribute__((section(".external_app.app_spaceinv.application_information"), us
     (uint8_t*)0x00000000,
     ui::external_app::spaceinv::initialize_app,
     CURRENT_HEADER_VERSION,
-    VERSION_MD5,
+    {},
 
     "Space Invaders",
     {

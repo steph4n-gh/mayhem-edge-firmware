@@ -1,4 +1,5 @@
 # Copyright (C) 2023 Bernd Herzog, Kyle Reed
+# Modified for HackRF Edge in 2026 by HackRF Edge contributors.
 #
 # This file is part of PortaPack.
 #
@@ -32,16 +33,29 @@ include(${CHIBIOS}/test/test.cmake)
 
 set(CMAKE_CXX_COMPILER g++)
 
+if(HACKRF_EDGE_PRECISION_RX_SEGMENTED_PPMA_DIAGNOSTIC)
+	set(PRECISION_RX_SEGMENTED_APPLICATION_TEST_SOURCE
+		${PROJECT_SOURCE_DIR}/test_file_lifecycle.cpp
+	)
+endif()
+
 add_executable(application_test EXCLUDE_FROM_ALL
 	${PROJECT_SOURCE_DIR}/main.cpp
 	${PROJECT_SOURCE_DIR}/test_basics.cpp
 	${PROJECT_SOURCE_DIR}/test_circular_buffer.cpp
 	${PROJECT_SOURCE_DIR}/test_convert.cpp
+	${PROJECT_SOURCE_DIR}/test_file_fast_seek.cpp
+	${PRECISION_RX_SEGMENTED_APPLICATION_TEST_SOURCE}
 	${PROJECT_SOURCE_DIR}/test_file_reader.cpp
 	${PROJECT_SOURCE_DIR}/test_file_wrapper.cpp
 	${PROJECT_SOURCE_DIR}/test_freqman_db.cpp
 	${PROJECT_SOURCE_DIR}/test_mock_file.cpp
-	${PROJECT_SOURCE_DIR}/test_optional.cpp
+		${PROJECT_SOURCE_DIR}/test_optional.cpp
+		${PROJECT_SOURCE_DIR}/test_precision_rx_capture_acceptance.cpp
+		${PROJECT_SOURCE_DIR}/test_precision_rx_capture_writer.cpp
+		${PROJECT_SOURCE_DIR}/test_precision_rx_rate_transaction.cpp
+		${PROJECT_SOURCE_DIR}/test_sd_acmd23_policy.cpp
+	${PROJECT_SOURCE_DIR}/test_sd_cmd6_workaround.cpp
 	${PROJECT_SOURCE_DIR}/test_string_format.cpp
 	${PROJECT_SOURCE_DIR}/test_utility.cpp
 
@@ -51,6 +65,7 @@ add_executable(application_test EXCLUDE_FROM_ALL
 	
 	# Dependencies
 	${PROJECT_SOURCE_DIR}/../../application/file.cpp
+	${PROJECT_SOURCE_DIR}/../../application/file_path.cpp
 	${PROJECT_SOURCE_DIR}/../../application/string_format.cpp
 	${PROJECT_SOURCE_DIR}/../../application/tone_key.cpp
 	${PROJECT_SOURCE_DIR}/linker_stubs.cpp
@@ -85,6 +100,32 @@ target_compile_options(application_test PRIVATE
 	${USE_OPT}
 	${CPPWARN}
 )
+
+if(HACKRF_EDGE_M0_SPILL_DIAGNOSTIC)
+	target_compile_definitions(application_test PRIVATE
+		HACKRF_EDGE_M0_SPILL_DIAGNOSTIC=1
+	)
+endif()
+if(HACKRF_EDGE_PRECISION_RX_HYBRID_POOL_DIAGNOSTIC)
+	target_compile_definitions(application_test PRIVATE
+		HACKRF_EDGE_PRECISION_RX_HYBRID_POOL_DIAGNOSTIC=1
+	)
+endif()
+if(HACKRF_EDGE_PRECISION_RX_DMA_LEASE_DIAGNOSTIC)
+	target_compile_definitions(application_test PRIVATE
+		HACKRF_EDGE_PRECISION_RX_DMA_LEASE_DIAGNOSTIC=1
+	)
+endif()
+if(HACKRF_EDGE_PRECISION_RX_RATE_TRANSACTION_DIAGNOSTIC)
+	target_compile_definitions(application_test PRIVATE
+		HACKRF_EDGE_PRECISION_RX_RATE_TRANSACTION_DIAGNOSTIC=1
+	)
+endif()
+if(HACKRF_EDGE_PRECISION_RX_SEGMENTED_PPMA_DIAGNOSTIC)
+	target_compile_definitions(application_test PRIVATE
+		HACKRF_EDGE_PRECISION_RX_SEGMENTED_PPMA_DIAGNOSTIC=1
+	)
+endif()
 
 add_test(NAME application_test
     COMMAND application_test

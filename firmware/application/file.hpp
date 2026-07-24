@@ -293,6 +293,11 @@ std::vector<std::filesystem::path> scan_root_directories(const std::filesystem::
  * Pattern '?' must be contiguous (bad: "FOO?_??")
  * Returns empty path if a filename could not be created. */
 std::filesystem::path next_filename_matching_pattern(const std::filesystem::path& pattern);
+#if defined(HACKRF_EDGE_PRECISION_RX_SEGMENTED_PPMA_DIAGNOSTIC)
+std::filesystem::path next_filename_matching_pattern(
+    const std::filesystem::path& pattern,
+    const std::filesystem::path& result_suffix);
+#endif
 
 /* Values added to FatFs FRESULT enum, values outside the FRESULT data type */
 static_assert(sizeof(FIL::err) == 1, "FatFs FIL::err size not expected.");
@@ -303,6 +308,37 @@ static_assert(sizeof(FIL::err) == 1, "FatFs FIL::err size not expected.");
 #define FR_EOF (0x101)
 #define FR_BAD_SEEK (0x102)
 #define FR_UNEXPECTED (0x103)
+
+namespace file_detail {
+
+/*
+ * Validate the bounded FatFs cluster-link map produced by CREATE_LINKMAP.
+ * Keeping this structural check independent of FIL makes the fail-closed
+ * contract host-testable without emulating FatFs allocation behavior.
+ */
+inline bool bounded_fast_seek_table_valid(
+    const DWORD* const table,
+    const size_t table_entries) {
+    if (!table || table_entries < 4U) {
+        return false;
+    }
+
+    const size_t used_entries = table[0];
+    if (used_entries < 4U || used_entries > table_entries ||
+        (used_entries & 1U) != 0U || table[used_entries - 1U] != 0U) {
+        return false;
+    }
+    for (size_t index = 1U; index + 1U < used_entries; index += 2U) {
+        const DWORD cluster_count = table[index];
+        const DWORD first_cluster = table[index + 1U];
+        if (cluster_count == 0U || first_cluster < 2U) {
+            return false;
+        }
+    }
+    return true;
+}
+
+} /* namespace file_detail */
 
 /* NOTE: sizeof(File) == 556 bytes because of the FIL's buf member. */
 class File {
@@ -335,15 +371,72 @@ class File {
     void close();
     Optional<Error> append(const std::filesystem::path& filename);
     Optional<Error> create(const std::filesystem::path& filename);
+    Optional<Error> create_new(const std::filesystem::path& filename) {
+        return open_fatfs(filename, FA_WRITE | FA_CREATE_NEW);
+    }
 
     Result<Size> read(void* data, const Size bytes_to_read);
     Result<Size> write(const void* data, Size bytes_to_write);
 
     Offset tell() const;
     Result<Offset> seek(uint64_t Offset);
+
+    /*
+     * Attach a caller-bounded FatFs cluster-link map to an existing file.
+     * The map storage is caller-owned and must outlive this File.  Reject
+     * malformed or over-capacity maps rather than entering the real-time path
+     * with ordinary FAT traversal.
+     *
+     * Keep only the raw FatFs map builder resident.  The fail-closed wrapper
+     * stays with its external-app caller so neither the fixed 32 KiB PPMA slot
+     * nor the aggregate SPI image pays for the whole operation twice.
+     */
+    inline Optional<Error> enable_bounded_fast_seek(
+        DWORD* const table,
+        const size_t table_entries) {
+#if _USE_FASTSEEK
+        if (!table || table_entries < 4U ||
+            table_entries > static_cast<size_t>(UINT32_MAX)) {
+            return Error{FR_INVALID_PARAMETER};
+        }
+
+        const auto result = build_fast_seek_linkmap(
+            table, static_cast<DWORD>(table_entries));
+        if (result != FR_OK) {
+            return Error{result};
+        }
+        if (!file_detail::bounded_fast_seek_table_valid(
+                table, table_entries)) {
+            f.cltbl = nullptr;
+            return Error{FR_DENIED};
+        }
+        return {};
+#else
+        (void)table;
+        (void)table_entries;
+        return Error{FR_NOT_ENABLED};
+#endif
+    }
+
+    /* Detach caller-owned CLMT storage before that storage's lifetime ends. */
+    inline void disable_fast_seek() {
+#if _USE_FASTSEEK
+        f.cltbl = nullptr;
+#endif
+    }
+
     Result<Offset> truncate();
     Size size() const;
     Result<bool> eof();
+
+    /*
+     * FatFs latches low-level I/O failures in FIL::err and then refuses seek
+     * or truncate.  A caller recovering a failed aligned write may clear that
+     * latch before attempting best-effort rollback to a previously committed
+     * file offset.  The subsequent filesystem operations still report any
+     * persistent media failure.
+     */
+    void clear_error() { f_error(&f) = 0; }
 
     template <size_t N>
     Result<Size> write(const std::array<uint8_t, N>& data) {
@@ -363,6 +456,17 @@ class File {
     FIL f{};
 
     Optional<Error> open_fatfs(const std::filesystem::path& filename, BYTE mode);
+    __attribute__((noinline)) FRESULT build_fast_seek_linkmap(
+        DWORD* table,
+        DWORD table_entries);
 };
+
+#if defined(HACKRF_EDGE_PRECISION_RX_SEGMENTED_PPMA_DIAGNOSTIC)
+/* Close an owned new file and remove it if its contents are incomplete. */
+bool finish_new_file(
+    File& file,
+    const std::filesystem::path& path,
+    bool contents_complete);
+#endif
 
 #endif /*__FILE_H__*/

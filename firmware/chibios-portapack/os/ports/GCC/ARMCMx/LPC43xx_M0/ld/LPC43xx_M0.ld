@@ -142,7 +142,7 @@ SECTIONS
         PROVIDE(_edata = .);
     } > ram
 
-    _textend = LOADADDR(.data) + SIZEOF(.data);
+    __application_data_image_end = LOADADDR(.data) + SIZEOF(.data);
 
     .bss ALIGN(4) : ALIGN(4)
     {
@@ -154,10 +154,31 @@ SECTIONS
         . = ALIGN(4);
         PROVIDE(_bss_end = .);
     } > ram
+
+    /*
+     * Keep an eight-byte, zero-filled cohort slot at the end of the deployed
+     * application image.  The exporter derives a composite SHA-1 while this
+     * slot and every PPMA fingerprint are zero.  The hash covers this exact
+     * application image, each fully relocated/M4-appended PPMA body, and the
+     * packaging inputs, then stamps one raw 64-bit prefix across the cohort.
+     */
+    .build_cohort_fingerprint __application_data_image_end : ALIGN(4)
+    {
+        __external_app_build_fingerprint = .;
+        LONG(0);
+        LONG(0);
+        __external_app_build_fingerprint_end = .;
+    } > flash
+
+    _textend = __external_app_build_fingerprint_end;
+
+    ASSERT(
+        (__external_app_build_fingerprint_end - __external_app_build_fingerprint) == 8,
+        "External app compatibility fingerprint slot must be eight bytes")
 }
 
-PROVIDE(end = .);
-_end            = .;
+PROVIDE(end = _bss_end);
+_end            = _bss_end;
 
 /*
  * Heap configuration:
@@ -165,4 +186,6 @@ _end            = .;
  * - Otherwise: use remaining AHB SRAM after bss (HackRF One)
  */
 __heap_base__ = (LD_M0_LOCAL_HEAP_SIZE > 0) ? ORIGIN(ram_local) : _end;
-__heap_end__  = (LD_M0_LOCAL_HEAP_SIZE > 0) ? (ORIGIN(ram_local) + LENGTH(ram_local)) : __ram_end__;
+__heap_end__  = (LD_M0_LOCAL_HEAP_SIZE > 0)
+                    ? (ORIGIN(ram_local) + LENGTH(ram_local))
+                    : __ram_end__;

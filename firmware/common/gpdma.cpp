@@ -67,6 +67,68 @@ void Channel::configure(
 
 extern "C" {
 
+#if defined(HACKRF_EDGE_PRECISION_RX_RATE_TRANSACTION_DIAGNOSTIC)
+/*
+ * Implemented by the P12 Precision RX DMA path. The fast pair performs only
+ * MMIO, fixed-ring publication, and scalar telemetry; the deferred routine is
+ * the sole bridge into ChibiOS.
+ */
+void hackrf_edge_precision_rx_dma_fast_terminal_count(void);
+void hackrf_edge_precision_rx_dma_fast_fault(uint32_t pending_terminal_count);
+void hackrf_edge_precision_rx_dma_deferred_interrupt(void);
+
+CH_FAST_IRQ_HANDLER(DMA_IRQHandler) {
+    constexpr uint32_t precision_rx_channel_mask = 1U;
+    const uint32_t tc_stat = LPC_GPDMA->INTTCSTAT;
+    const uint32_t err_stat = LPC_GPDMA->INTERRSTAT;
+    const uint32_t enabled_channels = LPC_GPDMA->ENBLDCHNS;
+    const bool unexpected_channel =
+        ((tc_stat | err_stat | enabled_channels) &
+         ~precision_rx_channel_mask) != 0U;
+    const bool fault =
+        unexpected_channel ||
+        (err_stat & precision_rx_channel_mask) != 0U;
+
+    /*
+     * ERR is W1C only after the product fault gate has closed. TC is W1C
+     * before normal bookkeeping so a later completion can re-pend this
+     * priority-1 vector instead of merging into the current sticky bit.
+     */
+    if (fault) {
+        hackrf_edge_precision_rx_dma_fast_fault(
+            (tc_stat & precision_rx_channel_mask) != 0U ? 1U : 0U);
+    }
+    if (tc_stat != 0U) {
+        LPC_GPDMA->INTTCCLR = tc_stat;
+        __DMB();
+        if (!fault &&
+            (tc_stat & precision_rx_channel_mask) != 0U) {
+            hackrf_edge_precision_rx_dma_fast_terminal_count();
+        }
+    }
+    if (err_stat != 0U) {
+        if (!fault) {
+            hackrf_edge_precision_rx_dma_fast_fault(0U);
+        }
+        __DMB();
+        LPC_GPDMA->INTERRCLR = err_stat;
+    }
+
+    if (fault || (tc_stat | err_stat) != 0U) {
+        __DMB();
+        NVIC_ISPR(SGPIO_IRQn >> 5U) =
+            1U << (SGPIO_IRQn & 0x1fU);
+    }
+}
+
+CH_IRQ_HANDLER(SGPIO_IRQHandler) {
+    CH_IRQ_PROLOGUE();
+    chSysLockFromIsr();
+    hackrf_edge_precision_rx_dma_deferred_interrupt();
+    chSysUnlockFromIsr();
+    CH_IRQ_EPILOGUE();
+}
+#else
 CH_IRQ_HANDLER(DMA_IRQHandler) {
     CH_IRQ_PROLOGUE();
 
@@ -105,6 +167,7 @@ CH_IRQ_HANDLER(DMA_IRQHandler) {
 
     CH_IRQ_EPILOGUE();
 }
+#endif
 }
 
 } /* namespace gpdma */

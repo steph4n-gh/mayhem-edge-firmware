@@ -35,6 +35,9 @@
 
 #include "ch.h"
 #include "hal.h"
+#if defined(HACKRF_EDGE_SD_CMD6_DIAGNOSTIC)
+#include "sd_cmd6_workaround.h"
+#endif
 
 #if HAL_USE_SDC || defined(__DOXYGEN__)
 
@@ -197,10 +200,27 @@ void sdcStop(SDCDriver *sdcp) {
  */
 bool_t sdcConnect(SDCDriver *sdcp) {
   uint32_t resp[1];
+#if defined(HACKRF_EDGE_SD_CMD6_DIAGNOSTIC)
+  bool_t force_default_speed = FALSE;
+  bool_t retry_default_speed = FALSE;
+  sdcflags_t errors_before_cmd6 = SDC_NO_ERROR;
+#endif
 
   chDbgCheck(sdcp != NULL, "sdcConnect");
   chDbgAssert((sdcp->state == BLK_ACTIVE) || (sdcp->state == BLK_READY),
               "mmcConnect(), #1", "invalid state");
+
+#if defined(HACKRF_EDGE_SD_CMD6_DIAGNOSTIC)
+  /* Outcome zero means this connection has not completed CMD6 negotiation. */
+  SDCD1_cmd6_diagnostic.flags = 0;
+  __DMB();
+#endif
+
+#if defined(HACKRF_EDGE_SD_CMD6_DIAGNOSTIC)
+connect_attempt:
+  if (force_default_speed)
+    sdc_lld_set_bus_mode(sdcp, SDC_MODE_1BIT);
+#endif
 
   /* Connection procedure in progress.*/
   sdcp->state = BLK_CONNECTING;
@@ -316,12 +336,52 @@ bool_t sdcConnect(SDCDriver *sdcp) {
     break;
   }
 
+#if defined(HACKRF_EDGE_SD_CMD6_DIAGNOSTIC)
+  if (!force_default_speed) {
+    errors_before_cmd6 = sdcp->errors;
+    const sdccmd6result_t cmd6_result = sdc_lld_try_high_speed(sdcp);
+    SDCD1_cmd6_diagnostic.flags =
+      (SDCD1_cmd6_diagnostic.flags & ~SDC_CMD6_DIAG_OUTCOME_MASK) |
+      SDC_CMD6_DIAG_OUTCOME(cmd6_result);
+    __DMB();
+    const sdc_cmd6_connect_action_t cmd6_action =
+      sdc_cmd6_connect_action(cmd6_result, force_default_speed);
+    if (cmd6_action == SDC_CMD6_CONNECT_RETRY_DEFAULT) {
+      /*
+       * The failed status transfer may follow a successful switch.  Stop the
+       * current connection and let the next attempt's initialization clocks
+       * and CMD0 return the card to a known Default Speed state.
+       */
+      force_default_speed = TRUE;
+      retry_default_speed = TRUE;
+      goto failed;
+    }
+    if (cmd6_action == SDC_CMD6_CONNECT_FAIL)
+      goto failed;
+    if (cmd6_action == SDC_CMD6_CONNECT_ENABLE_HIGH_SPEED) {
+      sdcp->cardmode |= SDC_MODE_HIGH_SPEED;
+      sdc_lld_set_high_speed_clk(sdcp);
+    }
+  }
+#endif
+
   /* Determine capacity.*/
   sdcp->capacity = mmcsdGetCapacity(sdcp->csd);
   if (sdcp->capacity == 0)
     goto failed;
 
   /* Initialization complete.*/
+#if defined(HACKRF_EDGE_SD_PREERASE_DIAGNOSTIC)
+  sdc_lld_capture_preerase_reset();
+#endif
+#if defined(HACKRF_EDGE_SD_CMD6_DIAGNOSTIC)
+  if (force_default_speed) {
+    SDCD1_cmd6_diagnostic.flags =
+      (SDCD1_cmd6_diagnostic.flags & ~SDC_CMD6_DIAG_OUTCOME_MASK) |
+      SDC_CMD6_DIAG_OUTCOME(SDC_CMD6_NEGOTIATION_RECOVERED);
+    __DMB();
+  }
+#endif
   sdcp->state = BLK_READY;
   return CH_SUCCESS;
 
@@ -329,6 +389,14 @@ bool_t sdcConnect(SDCDriver *sdcp) {
 failed:
   sdc_lld_stop_clk(sdcp);
   sdcp->state = BLK_ACTIVE;
+#if defined(HACKRF_EDGE_SD_CMD6_DIAGNOSTIC)
+  if (retry_default_speed) {
+    retry_default_speed = FALSE;
+    /* The public connect operation recovered; retain only pre-CMD6 errors. */
+    sdcp->errors = errors_before_cmd6;
+    goto connect_attempt;
+  }
+#endif
   return CH_FAILED;
 }
 

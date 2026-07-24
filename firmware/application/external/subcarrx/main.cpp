@@ -34,7 +34,7 @@ __attribute__((section(".external_app.app_subcarrx.application_information"), us
     /*.memory_location = */ (uint8_t*)0x00000000,
     /*.externalAppEntry = */ ui::external_app::subcarrx::initialize_app,
     /*.header_version = */ CURRENT_HEADER_VERSION,
-    /*.app_version = */ VERSION_MD5,
+    /*.build_fingerprint = */ {},
 
     /*.app_name = */ "SubCar",
     /*.bitmap_data = */ {

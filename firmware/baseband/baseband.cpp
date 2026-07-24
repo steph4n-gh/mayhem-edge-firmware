@@ -31,6 +31,25 @@
 
 static void init() {
     // Audio DMA initialization was moved to baseband proc's that actually use DMA audio, to save memory.
+#if defined(HACKRF_EDGE_PRECISION_RX_RATE_TRANSACTION_DIAGNOSTIC)
+    /*
+     * Precision RX does not use SGPIO peripheral interrupts. Keep every
+     * hardware source disabled so this otherwise-unused vector is exclusively
+     * a software-pended, kernel-safe continuation of the priority-1 DMA ISR.
+     */
+    LPC_SGPIO->CLR_EN_0 = UINT32_MAX;
+    LPC_SGPIO->CLR_EN_1 = UINT32_MAX;
+    LPC_SGPIO->CLR_EN_2 = UINT32_MAX;
+    LPC_SGPIO->CLR_EN_3 = UINT32_MAX;
+    LPC_SGPIO->CLR_STATUS_0 = UINT32_MAX;
+    LPC_SGPIO->CLR_STATUS_1 = UINT32_MAX;
+    LPC_SGPIO->CLR_STATUS_2 = UINT32_MAX;
+    LPC_SGPIO->CLR_STATUS_3 = UINT32_MAX;
+    __DMB();
+    nvicEnableVector(
+        SGPIO_IRQn,
+        CORTEX_PRIORITY_MASK(LPC_PRECISION_RX_DEFERRED_IRQ_PRIORITY));
+#endif
     nvicEnableVector(DMA_IRQn, CORTEX_PRIORITY_MASK(LPC_DMA_IRQ_PRIORITY));
 }
 
@@ -69,6 +88,9 @@ void _default_exit(void) {
     audio::dma::disable();
 
     nvicDisableVector(DMA_IRQn);
+#if defined(HACKRF_EDGE_PRECISION_RX_RATE_TRANSACTION_DIAGNOSTIC)
+    nvicDisableVector(SGPIO_IRQn);
+#endif
 
     chSysDisable();
 

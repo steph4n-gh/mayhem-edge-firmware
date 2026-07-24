@@ -28,6 +28,11 @@
 #include "portapack_shared_memory.hpp"
 #include "performance_counter.hpp"
 
+static_assert(
+    8 + sizeof(struct extctx) <=
+        SharedMemory::m4_panic_context_reserved_bytes,
+    "M4 panic context exceeds its reserved SharedMemory::bb_data prefix");
+
 void write_m4_panic_msg(const char* panic_message, struct extctx* ctxp) {
     if (ctxp == nullptr) {
         shared_memory.bb_data.data[0] = 0;

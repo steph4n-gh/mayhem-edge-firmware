@@ -37,7 +37,17 @@
  */
 
 // #define LPC_ADC0_IRQ_PRIORITY               2
+#if defined(HACKRF_EDGE_PRECISION_RX_RATE_TRANSACTION_DIAGNOSTIC)
+/*
+ * P12 clears PL080 terminal-count status at a kernel-independent priority so
+ * ChibiOS critical sections cannot merge multiple 102.4 us completions into
+ * one sticky status bit. Scheduler work is software-deferred to SGPIO.
+ */
+#define LPC_DMA_IRQ_PRIORITY 1
+#define LPC_PRECISION_RX_DEFERRED_IRQ_PRIORITY 3
+#else
 #define LPC_DMA_IRQ_PRIORITY 3
+#endif
 // #define LPC_ADC1_IRQ_PRIORITY               4
 
 #define LPC43XX_M0APPTXEVENT_IRQ_PRIORITY 4

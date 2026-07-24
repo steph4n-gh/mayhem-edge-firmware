@@ -21,14 +21,41 @@
 
 #include "thread_wait.hpp"
 
+#if defined(HACKRF_EDGE_PRECISION_RX_RATE_TRANSACTION_DIAGNOSTIC)
+#include "hal.h"
+#endif
+
 int ThreadWait::sleep() {
     chSysLock();
+#if defined(HACKRF_EDGE_PRECISION_RX_RATE_TRANSACTION_DIAGNOSTIC)
+    const auto result = sleep_locked();
+#else
     thread_to_wake = chThdSelf();
     chSchGoSleepS(THD_STATE_SUSPENDED);
     const auto result = chThdSelf()->p_u.rdymsg;
+#endif
     chSysUnlock();
     return result;
 }
+
+#if defined(HACKRF_EDGE_PRECISION_RX_RATE_TRANSACTION_DIAGNOSTIC)
+__attribute__((noinline, noclone, optimize("Os")))
+int ThreadWait::sleep_locked(uint8_t volatile* const armed) {
+    thread_to_wake = chThdSelf();
+    if (armed) {
+        /*
+         * Publish the ordinary waiter before declaring a paused DMA worker
+         * armed. A subsequent first terminal-count IRQ can therefore only
+         * enqueue and wake a fully installed waiter.
+         */
+        __DMB();
+        *armed = 1U;
+        __DMB();
+    }
+    chSchGoSleepS(THD_STATE_SUSPENDED);
+    return chThdSelf()->p_u.rdymsg;
+}
+#endif
 
 bool ThreadWait::wake_from_interrupt(const int value) {
     if (thread_to_wake) {

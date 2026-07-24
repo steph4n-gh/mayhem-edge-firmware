@@ -749,6 +749,15 @@ void set_beep_on_packets(bool v) {
 }
 
 void set_config_sdcard_high_speed_io(bool v, bool save) {
+#if defined(HACKRF_EDGE_SD_CMD6_DIAGNOSTIC)
+    /* Diagnostic clocking is controlled only by verified CMD6 negotiation. */
+    (void)v;
+#elif defined(HACKRF_EDGE_SD_SAFE_DEFAULT_SPEED)
+    /* Recovery builds must not revive an unnegotiated persisted 50 MHz mode. */
+    (void)v;
+    sdio_cclk_set(4);
+    v = false;
+#else
     if (v) {
         /* 200MHz / (2 * 2) = 50MHz */
         /* TODO: Adjust SCU pin configurations: pull-up/down, slew, glitch filter? */
@@ -757,6 +766,7 @@ void set_config_sdcard_high_speed_io(bool v, bool save) {
         /* 200MHz / (2 * 4) = 25MHz */
         sdio_cclk_set(4);
     }
+#endif
     if (save)
         data->misc_config.config_sdcard_high_speed_io = v;
 }

@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2023 Kyle Reed
+ * Modified for HackRF Edge in 2026 by HackRF Edge contributors.
  *
  * This file is part of PortaPack.
  *
@@ -133,12 +134,12 @@ TEST_CASE("It can parse frequency step") {
     REQUIRE(
         parse_freqman_entry(
             "f=123000000,d=This is the description.,s=0.1kHz", e));
-    CHECK_EQ(e.step, 0);
+    CHECK_EQ(e.step, 2);
 
     REQUIRE(
         parse_freqman_entry(
             "f=123000000,d=This is the description.,s=50kHz", e));
-    CHECK_EQ(e.step, 11);
+    CHECK_EQ(e.step, 13);
 
     REQUIRE(
         parse_freqman_entry(
@@ -214,6 +215,10 @@ TEST_CASE("It can serialize basic Repeater entry") {
         .type = freqman_type::Repeater,
     });
     CHECK(str == "l=123456000,t=423456000,d=Foobar");
+}
+
+TEST_CASE("It builds a path in the FREQMAN directory") {
+    CHECK(get_freqman_path("SCANNER").string() == "FREQMAN/SCANNER.TXT");
 }
 
 // New tables for a future PR.

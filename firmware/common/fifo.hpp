@@ -27,6 +27,10 @@
 #include <cstring>
 #include <memory>
 
+#if defined(STREAM_INPUT_HOST_TEST)
+#include <atomic>
+#endif
+
 #include <hal.h>
 
 /* FIFO implementation inspired by Linux kfifo. */
@@ -172,7 +176,11 @@ class FIFO {
     }
 
     void smp_wmb() {
+#if defined(STREAM_INPUT_HOST_TEST)
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+#else
         __DMB();
+#endif
     }
 
     size_t peek_n() {

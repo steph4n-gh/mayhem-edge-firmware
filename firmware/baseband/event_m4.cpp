@@ -111,7 +111,22 @@ void EventDispatcher::on_message(const Message* const message) {
     }
 }
 
-void EventDispatcher::on_message_shutdown(const ShutdownMessage&) {
+#if defined(HACKRF_EDGE_PRECISION_RX_RATE_TRANSACTION_DIAGNOSTIC)
+__attribute__((noinline, noclone, optimize("Os")))
+#endif
+void EventDispatcher::on_message_shutdown(
+    const ShutdownMessage& message) {
+#if defined(HACKRF_EDGE_PRECISION_RX_RATE_TRANSACTION_DIAGNOSTIC)
+    /*
+     * A rate fault makes RF safe first on M0. Before stopping the dispatcher,
+     * explicitly forward that distinct persistent shutdown mode so Precision
+     * RX performs its fatal SGPIO/DMA fail-close. Normal shutdown is not
+     * forwarded: the BasebandThread destructor wakes the live-source worker,
+     * which owns H -> ACTIVE-clear -> gate -> E.
+     */
+    if (message.mode == ShutdownMessage::Mode::PrecisionRxFault)
+        baseband_processor->on_message(&message);
+#endif
     request_stop();
 }
 

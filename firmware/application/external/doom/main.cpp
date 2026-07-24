@@ -22,7 +22,7 @@ __attribute__((section(".external_app.app_doom.application_information"), used))
     (uint8_t*)0x00000000,
     ui::external_app::doom::initialize_app,
     CURRENT_HEADER_VERSION,
-    VERSION_MD5,
+    {},
     "Doom",
     {
         0x00,

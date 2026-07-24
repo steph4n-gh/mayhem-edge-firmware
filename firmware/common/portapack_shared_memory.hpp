@@ -28,6 +28,68 @@
 
 #include "message_queue.hpp"
 
+#if defined(HACKRF_EDGE_PRECISION_RX_RATE_TRANSACTION_DIAGNOSTIC)
+namespace precision_rx {
+namespace dma_telemetry {
+
+/*
+ * P15 keeps the SharedMemory ABI fixed by packing the durable quiesce-failure
+ * reason into the high nibble of the existing transition-failure word. The
+ * remaining 28 bits retain a saturating lifetime failure count.
+ */
+enum class QuiesceFailure : uint32_t {
+    None = 0,
+    CounterUnavailable = 1,
+    ActiveDrainTimeout = 2,
+    DmaErrorBeforeHalt = 3,
+    DmaErrorDuringDrain = 4,
+    DmaErrorAfterDrain = 5,
+    DmaErrorAfterDisable = 6,
+    ChannelDisabled = 7,
+    ActiveReassertedAfterGate = 8,
+};
+
+constexpr uint32_t quiesce_failure_shift = 28U;
+constexpr uint32_t transition_failure_count_mask =
+    (uint32_t{1U} << quiesce_failure_shift) - 1U;
+constexpr uint32_t quiesce_failure_mask =
+    ~transition_failure_count_mask;
+
+constexpr uint32_t transition_failure_count(const uint32_t encoded) {
+    return encoded & transition_failure_count_mask;
+}
+
+constexpr QuiesceFailure quiesce_failure(const uint32_t encoded) {
+    return static_cast<QuiesceFailure>(
+        (encoded & quiesce_failure_mask) >> quiesce_failure_shift);
+}
+
+constexpr uint32_t with_quiesce_failure(
+    const uint32_t encoded,
+    const QuiesceFailure reason) {
+    return transition_failure_count(encoded) |
+           (static_cast<uint32_t>(reason) << quiesce_failure_shift);
+}
+
+constexpr uint32_t increment_transition_failure(const uint32_t encoded) {
+    const uint32_t count = transition_failure_count(encoded);
+    return (encoded & quiesce_failure_mask) |
+           (count == transition_failure_count_mask ? count : count + 1U);
+}
+
+static_assert(
+    static_cast<uint32_t>(QuiesceFailure::ActiveReassertedAfterGate) < 16U);
+static_assert(
+    increment_transition_failure(
+        with_quiesce_failure(0U, QuiesceFailure::ActiveDrainTimeout)) ==
+    0x20000001U);
+static_assert(
+    increment_transition_failure(0x2fffffffU) == 0x2fffffffU);
+
+}  // namespace dma_telemetry
+}  // namespace precision_rx
+#endif
+
 struct JammerChannel {
     bool enabled;
     uint64_t center;
@@ -57,6 +119,9 @@ struct ToneData {
 struct SharedMemory {
     static constexpr size_t application_queue_k = 11;
     static constexpr size_t app_local_queue_k = 11;
+    // bb_data doubles as the M4 hard-fault context mailbox. Segmented
+    // Precision RX code may use only bytes after this reserved prefix.
+    static constexpr size_t m4_panic_context_reserved_bytes = 112;
 
     uint8_t application_queue_data[1 << application_queue_k]{0};
     uint8_t app_local_queue_data[1 << app_local_queue_k]{0};
@@ -92,6 +157,26 @@ struct SharedMemory {
     uint32_t volatile m4_dma_wait_count{0};   // wait_for_buffer() calls
     uint32_t volatile m4_baseband_loops{0};   // Main loop iterations
     uint8_t volatile m4_streaming_marker{0};  // Proves streaming_enable() called
+#endif
+#if defined(HACKRF_EDGE_PRECISION_RX_RATE_TRANSACTION_DIAGNOSTIC)
+    /*
+     * Appended p12 Precision RX telemetry. Keep the legacy prefix unchanged so
+     * unrelated M4 images remain layout-compatible when this private profile
+     * is enabled only for the Precision RX baseband image.
+     */
+    uint32_t volatile m4_dma_missed_lifetime{0};
+    uint32_t volatile m4_dma_tc_total{0};
+    uint32_t volatile m4_dma_queue_dropped{0};
+    uint32_t volatile m4_dma_reuse_dropped{0};
+    uint32_t volatile m4_dma_error_dropped{0};
+    uint32_t volatile m4_dma_boundary_discarded{0};
+    uint32_t volatile m4_dma_rate_hz{0};
+    uint32_t volatile m4_dma_transaction_id{0};
+    uint32_t volatile m4_dma_transition_failures{0};
+    uint8_t volatile m4_dma_queue_depth{0};
+    uint8_t volatile m4_dma_queue_high_water{0};
+    uint8_t volatile m4_dma_phase{0};
+    uint8_t volatile m4_dma_rate_state{0};
 #endif
 };
 

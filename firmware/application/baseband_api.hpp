@@ -1,6 +1,7 @@
 /*
  * Copyright (C) 2016 Jared Boone, ShareBrained Technology, Inc.
  * Copyright (C) 2016 Furrtek
+ * Modified for HackRF Edge in 2026 by HackRF Edge contributors.
  *
  * This file is part of PortaPack.
  *
@@ -123,6 +124,36 @@ void set_epirb_tx_config(EPIRBTXDataMessage& message);
 void set_epirb_rx_config(EPIRBRXConfig& message);
 void set_p25tx_data(const uint8_t* dibits, uint16_t frame_length);
 void set_hunter_config(uint32_t threshold, uint32_t hangtime_ms, bool start);
+#if defined(HACKRF_EDGE_PRECISION_RX_RATE_TRANSACTION_DIAGNOSTIC)
+enum class PrecisionRxRateResult : uint8_t {
+    Applied,
+    Rejected,
+    RolledBack,
+    Fatal,
+};
+
+constexpr bool is_precision_rx_rate_rejection(
+    const uint32_t response) noexcept {
+    using namespace precision_rx::rate_control;
+    switch (response) {
+        case reject_invalid_rate:
+        case reject_state:
+        case reject_capture_active:
+        case reject_halt_timeout:
+        case reject_arm_timeout:
+        case reject_resume_timeout:
+        case reject_dma_loss:
+            return true;
+        default:
+            return false;
+    }
+}
+
+PrecisionRxRateResult set_precision_rx(uint32_t input_sample_rate_hz);
+bool shutdown_precision_rx_after_rate_fault();
+#else
+void set_precision_rx(uint32_t input_sample_rate_hz);
+#endif
 
 void request_roger_beep();
 void request_rssi_beep();
@@ -140,7 +171,7 @@ void spectrum_streaming_stop();
 /* NB: sample_rate should be desired rate. Don't pre-scale. */
 void set_sample_rate(uint32_t sample_rate, OversampleRate oversample_rate = OversampleRate::None);
 void capture_start(CaptureConfig* const config);
-void capture_stop();
+void capture_stop(bool flush = false);
 void replay_start(ReplayConfig* const config);
 void replay_stop();
 

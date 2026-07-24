@@ -1,6 +1,7 @@
 /*
  * Copyright (C) 2016 Jared Boone, ShareBrained Technology, Inc.
  * Copyright (C) 2016 Furrtek
+ * Modified for HackRF Edge in 2026 by HackRF Edge contributors.
  *
  * This file is part of PortaPack.
  *
@@ -32,6 +33,11 @@
 
 #include "core_control.hpp"
 
+#if defined(HACKRF_EDGE_PRECISION_RX_RATE_TRANSACTION_DIAGNOSTIC)
+#include "portapack.hpp"
+#include "ui_spectrum.hpp"
+#endif
+
 /* Set true to enable additional checks to ensure
  * M4 and M0 are synchronized before passing messages. */
 static constexpr bool enforce_core_sync = true;
@@ -44,7 +50,125 @@ static constexpr bool check_for_message_hang = true;
 
 using namespace portapack;
 
+#if defined(__arm__) && \
+    defined(HACKRF_EDGE_PRECISION_RX_RATE_TRANSACTION_DIAGNOSTIC)
+/*
+ * Linked p12 M0 policy evidence. The application verifier also inspects the
+ * optimized call ordering; these absolutes make profile detection and the
+ * reviewed fail-closed contract explicit.
+ */
+__asm__(
+    ".global hackrf_edge_precision_rx_app_rate_transaction_protocol_version\n"
+    ".type hackrf_edge_precision_rx_app_rate_transaction_protocol_version, %object\n"
+    ".set hackrf_edge_precision_rx_app_rate_transaction_protocol_version, 3\n"
+    ".size hackrf_edge_precision_rx_app_rate_transaction_protocol_version, 1\n"
+    ".global hackrf_edge_precision_rx_app_rate_prepare_before_physical_change\n"
+    ".type hackrf_edge_precision_rx_app_rate_prepare_before_physical_change, %object\n"
+    ".set hackrf_edge_precision_rx_app_rate_prepare_before_physical_change, 1\n"
+    ".size hackrf_edge_precision_rx_app_rate_prepare_before_physical_change, 1\n"
+    ".global hackrf_edge_precision_rx_app_rate_filter_before_clock\n"
+    ".type hackrf_edge_precision_rx_app_rate_filter_before_clock, %object\n"
+    ".set hackrf_edge_precision_rx_app_rate_filter_before_clock, 1\n"
+    ".size hackrf_edge_precision_rx_app_rate_filter_before_clock, 1\n"
+    ".global hackrf_edge_precision_rx_app_rate_commit_after_physical_change\n"
+    ".type hackrf_edge_precision_rx_app_rate_commit_after_physical_change, %object\n"
+    ".set hackrf_edge_precision_rx_app_rate_commit_after_physical_change, 1\n"
+    ".size hackrf_edge_precision_rx_app_rate_commit_after_physical_change, 1\n"
+    ".global hackrf_edge_precision_rx_app_rate_rollback_before_abort\n"
+    ".type hackrf_edge_precision_rx_app_rate_rollback_before_abort, %object\n"
+    ".set hackrf_edge_precision_rx_app_rate_rollback_before_abort, 1\n"
+    ".size hackrf_edge_precision_rx_app_rate_rollback_before_abort, 1\n"
+    ".global hackrf_edge_precision_rx_app_rate_fail_closed\n"
+    ".type hackrf_edge_precision_rx_app_rate_fail_closed, %object\n"
+    ".set hackrf_edge_precision_rx_app_rate_fail_closed, 1\n"
+    ".size hackrf_edge_precision_rx_app_rate_fail_closed, 1\n"
+    ".global hackrf_edge_precision_rx_app_rate_bounded_wait_iterations\n"
+    ".type hackrf_edge_precision_rx_app_rate_bounded_wait_iterations, %object\n"
+    ".set hackrf_edge_precision_rx_app_rate_bounded_wait_iterations, 500\n"
+    ".size hackrf_edge_precision_rx_app_rate_bounded_wait_iterations, 4\n"
+    ".global hackrf_edge_precision_rx_app_rate_persistent_message\n"
+    ".type hackrf_edge_precision_rx_app_rate_persistent_message, %object\n"
+    ".set hackrf_edge_precision_rx_app_rate_persistent_message, 1\n"
+    ".size hackrf_edge_precision_rx_app_rate_persistent_message, 1\n"
+    ".global hackrf_edge_precision_rx_app_rate_rejection_no_panic\n"
+    ".type hackrf_edge_precision_rx_app_rate_rejection_no_panic, %object\n"
+    ".set hackrf_edge_precision_rx_app_rate_rejection_no_panic, 1\n"
+    ".size hackrf_edge_precision_rx_app_rate_rejection_no_panic, 1\n"
+    ".global hackrf_edge_precision_rx_app_rate_fault_shutdown_bounded\n"
+    ".type hackrf_edge_precision_rx_app_rate_fault_shutdown_bounded, %object\n"
+    ".set hackrf_edge_precision_rx_app_rate_fault_shutdown_bounded, 1\n"
+    ".size hackrf_edge_precision_rx_app_rate_fault_shutdown_bounded, 1\n"
+    ".global hackrf_edge_precision_rx_app_rate_rollback_requires_paused_armed\n"
+    ".type hackrf_edge_precision_rx_app_rate_rollback_requires_paused_armed, %object\n"
+    ".set hackrf_edge_precision_rx_app_rate_rollback_requires_paused_armed, 1\n"
+    ".size hackrf_edge_precision_rx_app_rate_rollback_requires_paused_armed, 1\n"
+    ".global hackrf_edge_precision_rx_app_rate_commit_timeout_no_rollback\n"
+    ".type hackrf_edge_precision_rx_app_rate_commit_timeout_no_rollback, %object\n"
+    ".set hackrf_edge_precision_rx_app_rate_commit_timeout_no_rollback, 1\n"
+    ".size hackrf_edge_precision_rx_app_rate_commit_timeout_no_rollback, 1\n");
+#endif
+
 namespace baseband {
+
+#if defined(HACKRF_EDGE_PRECISION_RX_RATE_TRANSACTION_DIAGNOSTIC)
+/*
+ * This transaction machinery is used only by the Precision RX external app.
+ * Keep its code in that app's load image instead of consuming the last bytes
+ * of the fixed 1 MiB aggregate SPI image. Persistent mailbox objects remain
+ * in M0 RAM so a delayed M4 can never observe an expired stack object.
+ */
+#define HACKRF_EDGE_PRECISION_RX_EXTERNAL_TEXT \
+    __attribute__((section(".text.ui.external_app.precision_rx.rate_transaction")))
+
+namespace {
+
+constexpr uint32_t precision_rx_rate_message_wait_iterations = 500U;
+constexpr uint8_t precision_rx_rate_state_running = 1U;
+constexpr uint8_t precision_rx_rate_state_paused_armed = 3U;
+PrecisionRxConfigMessage precision_rx_rate_message{};
+ShutdownMessage precision_rx_fault_shutdown_message{
+    ShutdownMessage::Mode::PrecisionRxFault};
+bool precision_rx_rate_fault_latched{false};
+
+}  // namespace
+
+HACKRF_EDGE_PRECISION_RX_EXTERNAL_TEXT
+__attribute__((noinline, noclone, used, externally_visible, optimize("Os", "no-if-conversion", "no-if-conversion2"))) bool send_precision_rx_message_bounded(const Message* const message) {
+    /*
+     * Callers provide persistent storage. A timeout therefore cannot publish
+     * a pointer to an expired stack frame if the M4 is delayed or faulted.
+     */
+    if (shared_memory.baseband_message != nullptr) {
+        return false;
+    }
+
+    __DMB();
+    shared_memory.baseband_message = message;
+    __DMB();
+    creg::m0apptxevent::assert_event();
+
+    uint32_t remaining = precision_rx_rate_message_wait_iterations;
+    while (shared_memory.baseband_message != nullptr && remaining != 0U) {
+        --remaining;
+        chThdSleepMilliseconds(1);
+    }
+    __DMB();
+    return shared_memory.baseband_message == nullptr;
+}
+
+HACKRF_EDGE_PRECISION_RX_EXTERNAL_TEXT
+static bool precision_rx_rate_state_is(const uint8_t expected) {
+    __DMB();
+    return shared_memory.m4_dma_rate_state == expected;
+}
+
+HACKRF_EDGE_PRECISION_RX_EXTERNAL_TEXT
+static PrecisionRxRateResult precision_rx_rate_fatal() {
+    precision_rx_rate_fault_latched = true;
+    receiver_model.disable();
+    return PrecisionRxRateResult::Fatal;
+}
+#endif
 
 static void send_message(const Message* const message) {
     // If message is only sent by this function via one thread, no need to check if
@@ -463,6 +587,105 @@ void set_hunter_config(uint32_t threshold, uint32_t hangtime_ms, bool start) {
     send_message(&message);
 }
 
+#if defined(HACKRF_EDGE_PRECISION_RX_RATE_TRANSACTION_DIAGNOSTIC)
+HACKRF_EDGE_PRECISION_RX_EXTERNAL_TEXT
+PrecisionRxRateResult set_precision_rx(uint32_t input_sample_rate_hz) {
+    using Result = PrecisionRxRateResult;
+
+    if (precision_rx_rate_fault_latched) {
+        return precision_rx_rate_fatal();
+    }
+
+    /*
+     * Keep the invariant message ID in persistent storage; only its mutable
+     * request/ack word changes across PREPARE, COMMIT, and ABORT.
+     */
+    precision_rx_rate_message.input_sample_rate_hz = input_sample_rate_hz;
+    if (!send_precision_rx_message_bounded(&precision_rx_rate_message)) {
+        return precision_rx_rate_fatal();
+    }
+
+    const uint32_t prepare_response =
+        precision_rx_rate_message.input_sample_rate_hz;
+    if (prepare_response ==
+        precision_rx::rate_control::ack_configured) {
+        if (precision_rx_rate_state_is(precision_rx_rate_state_running)) {
+            return Result::Applied;
+        }
+        return precision_rx_rate_fatal();
+    }
+    if (prepare_response !=
+        precision_rx::rate_control::ack_prepared) {
+        /*
+         * Some PREPARE reject words can describe either a restored old stream
+         * or an M4 that already failed closed. Only RUN is recoverable.
+         */
+        if (is_precision_rx_rate_rejection(prepare_response) &&
+            precision_rx_rate_state_is(precision_rx_rate_state_running)) {
+            return Result::Rejected;
+        }
+        return precision_rx_rate_fatal();
+    }
+
+    const uint32_t previous_sample_rate = receiver_model.sampling_rate();
+    const uint32_t previous_filter_bandwidth =
+        receiver_model.baseband_bandwidth();
+    receiver_model.set_baseband_bandwidth(
+        ui::filter_bandwidth_for_sampling_rate(input_sample_rate_hz));
+    receiver_model.set_sampling_rate(input_sample_rate_hz);
+
+    precision_rx_rate_message.input_sample_rate_hz =
+        precision_rx::rate_control::request_commit;
+    const bool commit_completed =
+        send_precision_rx_message_bounded(&precision_rx_rate_message);
+    if (!commit_completed) {
+        return precision_rx_rate_fatal();
+    }
+
+    const uint32_t commit_response =
+        precision_rx_rate_message.input_sample_rate_hz;
+    if (commit_response ==
+        precision_rx::rate_control::ack_committed) {
+        if (precision_rx_rate_state_is(precision_rx_rate_state_running)) {
+            return Result::Applied;
+        }
+        return precision_rx_rate_fatal();
+    }
+
+    /*
+     * A completed, recognized rejection is rollback-safe only while M4 proves
+     * that the DMA ring is paused and armed. A timeout may leave the persistent
+     * COMMIT owned by M4, so it must never reach these physical writes.
+     */
+    if (!is_precision_rx_rate_rejection(commit_response) ||
+        !precision_rx_rate_state_is(precision_rx_rate_state_paused_armed)) {
+        return precision_rx_rate_fatal();
+    }
+
+    /* Restore the old physical clock before asking M4 to resume the old ring. */
+    receiver_model.set_sampling_rate(previous_sample_rate);
+    receiver_model.set_baseband_bandwidth(previous_filter_bandwidth);
+
+    precision_rx_rate_message.input_sample_rate_hz =
+        precision_rx::rate_control::request_abort;
+    if (!send_precision_rx_message_bounded(&precision_rx_rate_message)) {
+        return precision_rx_rate_fatal();
+    }
+
+    if (precision_rx_rate_message.input_sample_rate_hz !=
+            precision_rx::rate_control::ack_aborted ||
+        !precision_rx_rate_state_is(precision_rx_rate_state_running)) {
+        return precision_rx_rate_fatal();
+    }
+    return Result::RolledBack;
+}
+#else
+void set_precision_rx(uint32_t input_sample_rate_hz) {
+    const PrecisionRxConfigMessage message{input_sample_rate_hz};
+    send_message(&message);
+}
+#endif
+
 static bool baseband_image_running = false;
 
 bool is_image_running() {
@@ -537,6 +760,32 @@ void shutdown() {
     baseband_image_running = false;
 }
 
+#if defined(HACKRF_EDGE_PRECISION_RX_RATE_TRANSACTION_DIAGNOSTIC)
+HACKRF_EDGE_PRECISION_RX_EXTERNAL_TEXT
+bool shutdown_precision_rx_after_rate_fault() {
+    /*
+     * RF is made safe even when a wedged M4 still owns the message slot.
+     * Never overwrite that slot: every potentially outstanding object is
+     * persistent, and a later destructor call may retry this bounded stop.
+     */
+    receiver_model.disable();
+    if (!baseband_image_running) {
+        return true;
+    }
+
+    creg::m4txevent::disable();
+    if (!send_precision_rx_message_bounded(
+            &precision_rx_fault_shutdown_message)) {
+        return false;
+    }
+
+    shared_memory.application_queue.reset();
+    baseband_image_running = false;
+    return true;
+}
+#undef HACKRF_EDGE_PRECISION_RX_EXTERNAL_TEXT
+#endif
+
 void spectrum_streaming_start() {
     SpectrumStreamingConfigMessage message{
         SpectrumStreamingConfigMessage::Mode::Running};
@@ -559,8 +808,8 @@ void capture_start(CaptureConfig* const config) {
     send_message(&message);
 }
 
-void capture_stop() {
-    CaptureConfigMessage message{nullptr};
+void capture_stop(bool flush) {
+    CaptureConfigMessage message{nullptr, flush};
     send_message(&message);
 }
 

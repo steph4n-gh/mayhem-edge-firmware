@@ -26,6 +26,10 @@
 #ifndef _SDC_LLD_H_
 #define _SDC_LLD_H_
 
+#if defined(HACKRF_EDGE_SD_CMD6_DIAGNOSTIC)
+#include "sd_cmd6_workaround.h"
+#endif
+
 #if HAL_USE_SDC || defined(__DOXYGEN__)
 
 /*===========================================================================*/
@@ -94,6 +98,73 @@ typedef uint32_t sdcmode_t;
  * @brief   SDC Driver condition flags type.
  */
 typedef uint32_t sdcflags_t;
+
+#if defined(HACKRF_EDGE_SD_CMD6_DIAGNOSTIC)
+/**
+ * @brief Retained evidence from the most recent CMD6 data transaction.
+ * @note  This diagnostic is captured before error cleanup clears the
+ *        controller and IDMAC status registers.
+ */
+typedef struct {
+  uint32_t sequence;
+  uint32_t argument;
+  uint32_t response;
+  uint32_t raw_status;
+  uint32_t dma_status;
+  uint32_t transferred_card_bytes;
+  uint32_t transferred_fifo_bytes;
+  uint32_t descriptor_status;
+  uint32_t block_size;
+  uint32_t byte_count;
+  uint32_t flags;
+} sdccmd6diagnostic_t;
+
+#define SDC_CMD6_DIAG_WAIT_TIMEOUT       (1U << 0)
+#define SDC_CMD6_DIAG_SOFTWARE_CRC_VALID (1U << 1)
+#define SDC_CMD6_DIAG_STATUS_VALID       (1U << 2)
+#define SDC_CMD6_DIAG_ACCEPTED           (1U << 3)
+#define SDC_CMD6_DIAG_ILLEGAL_COMMAND    (1U << 4)
+
+extern volatile sdccmd6diagnostic_t SDCD1_cmd6_diagnostic;
+#endif
+
+#if defined(LPC43XX_M0) && defined(HACKRF_EDGE_SD_TIMING_DIAGNOSTIC)
+/**
+ * @brief Raw counter evidence for Precision RX capture SD writes.
+ * @note  The signed RF aggregate fields in PRX1 carry these words verbatim in
+ *        the diagnostic build; the host decoder reinterprets them as uint32_t.
+ */
+typedef struct {
+#if defined(HACKRF_EDGE_SD_PREERASE_DIAGNOSTIC)
+  uint32_t recycle_gap_total_ticks;
+  uint32_t recycle_gap_max_ticks;
+  uint32_t pre_ready_total_ticks;
+  uint32_t pre_ready_max_ticks;
+  uint32_t residual_ready_max_ticks;
+  uint32_t transfer_max_ticks;
+  uint32_t packed_counts;
+  uint32_t counter_frequency_hz;
+#else
+  uint32_t writer_total_ticks;
+  uint32_t writer_max_ticks;
+  uint32_t ready_total_ticks;
+  uint32_t ready_max_ticks;
+  uint32_t transfer_total_ticks;
+  uint32_t transfer_max_ticks;
+  uint32_t transaction_count;
+  uint32_t counter_frequency_hz;
+#endif
+} sdccapturetiming_t;
+
+#define SDC_CAPTURE_TIMING_HIGH_SPEED_FLAG (1U << 31)
+#if defined(HACKRF_EDGE_SD_PREERASE_DIAGNOSTIC)
+#define SDC_CAPTURE_TIMING_HINT_FATAL_FLAG  (1U << 30)
+#define SDC_CAPTURE_TIMING_FIFO_SHIFT       26U
+#define SDC_CAPTURE_TIMING_FIFO_MASK        (0xFU << SDC_CAPTURE_TIMING_FIFO_SHIFT)
+#define SDC_CAPTURE_TIMING_FALLBACK_SHIFT   13U
+#define SDC_CAPTURE_TIMING_COUNT_MASK       0x1FFFU
+#endif
+#endif
 
 /**
  * @brief   Type of a structure representing an SDC driver.
@@ -207,6 +278,10 @@ extern "C" {
   void sdc_lld_stop(SDCDriver *sdcp);
   void sdc_lld_start_clk(SDCDriver *sdcp);
   void sdc_lld_set_data_clk(SDCDriver *sdcp);
+#if defined(HACKRF_EDGE_SD_CMD6_DIAGNOSTIC)
+  sdccmd6result_t sdc_lld_try_high_speed(SDCDriver *sdcp);
+  void sdc_lld_set_high_speed_clk(SDCDriver *sdcp);
+#endif
   void sdc_lld_stop_clk(SDCDriver *sdcp);
   void sdc_lld_set_bus_mode(SDCDriver *sdcp, sdcbusmode_t mode);
   void sdc_lld_send_cmd_none(SDCDriver *sdcp, uint8_t cmd, uint32_t arg);
@@ -220,6 +295,21 @@ extern "C" {
                       uint8_t *buf, uint32_t n);
   bool_t sdc_lld_write(SDCDriver *sdcp, uint32_t startblk,
                        const uint8_t *buf, uint32_t n);
+#if defined(LPC43XX_M0) && defined(HACKRF_EDGE_SD_TIMING_DIAGNOSTIC)
+  void sdc_lld_capture_timing_begin(void);
+#if defined(HACKRF_EDGE_SD_PREERASE_DIAGNOSTIC)
+  void sdc_lld_capture_timing_record_cycle(uint32_t pre_ready_ticks,
+                                           uint32_t recycle_gap_ticks,
+                                           uint32_t fifo_depth);
+#else
+  void sdc_lld_capture_timing_record_write(uint32_t ticks);
+#endif
+  const sdccapturetiming_t *sdc_lld_capture_timing_end(void);
+#endif
+#if defined(LPC43XX_M0) && defined(HACKRF_EDGE_SD_PREERASE_DIAGNOSTIC)
+  void sdc_lld_capture_preerase_reset(void);
+  bool_t sdc_lld_capture_wait_ready(SDCDriver *sdcp);
+#endif
   bool_t sdc_lld_sync(SDCDriver *sdcp);
   bool_t sdc_lld_is_card_inserted(SDCDriver *sdcp);
   bool_t sdc_lld_is_write_protected(SDCDriver *sdcp);

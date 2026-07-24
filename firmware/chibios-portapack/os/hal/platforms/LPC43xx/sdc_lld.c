@@ -25,6 +25,12 @@
 
 #include "ch.h"
 #include "hal.h"
+#if defined(HACKRF_EDGE_SD_CMD6_DIAGNOSTIC)
+#include "sd_cmd6_workaround.h"
+#endif
+#if defined(HACKRF_EDGE_SD_PREERASE_DIAGNOSTIC)
+#include "sd_acmd23_policy.h"
+#endif
 
 #if HAL_USE_SDC || defined(__DOXYGEN__)
 
@@ -43,6 +49,10 @@
 SDCDriver SDCD1;
 #endif
 
+#if defined(HACKRF_EDGE_SD_CMD6_DIAGNOSTIC)
+volatile sdccmd6diagnostic_t SDCD1_cmd6_diagnostic;
+#endif
+
 /*===========================================================================*/
 /* Driver local variables and types.                                         */
 /*===========================================================================*/
@@ -55,6 +65,105 @@ static const sdio_resources_t sdio_resources = {
     .reset = {.output_index = 20},
     .interrupt = {.irq = SDIO_IRQn, .priority_mask = CORTEX_PRIORITY_MASK(LPC_SDC_SDIO_IRQ_PRIORITY)},
 };
+#endif
+
+#if defined(LPC43XX_M0) && defined(HACKRF_EDGE_SD_TIMING_DIAGNOSTIC)
+static sdccapturetiming_t sdc_capture_timing;
+static bool sdc_capture_timing_active;
+#if defined(HACKRF_EDGE_SD_PREERASE_DIAGNOSTIC)
+static sdc_acmd23_state_t sdc_capture_acmd23_state;
+#endif
+
+void sdc_lld_capture_timing_begin(void) {
+    sdc_capture_timing = (sdccapturetiming_t){
+        .counter_frequency_hz = halGetCounterFrequency(),
+    };
+    sdc_capture_timing_active = true;
+}
+
+#if defined(HACKRF_EDGE_SD_PREERASE_DIAGNOSTIC)
+void sdc_lld_capture_timing_record_cycle(
+    uint32_t pre_ready_ticks,
+    uint32_t recycle_gap_ticks,
+    uint32_t fifo_depth) {
+    if (sdc_capture_timing_active) {
+        const uint32_t prior_depth =
+            (sdc_capture_timing.packed_counts &
+             SDC_CAPTURE_TIMING_FIFO_MASK) >>
+            SDC_CAPTURE_TIMING_FIFO_SHIFT;
+
+        sdc_capture_timing.recycle_gap_total_ticks += recycle_gap_ticks;
+        sdc_capture_timing.pre_ready_total_ticks += pre_ready_ticks;
+        if (recycle_gap_ticks > sdc_capture_timing.recycle_gap_max_ticks)
+            sdc_capture_timing.recycle_gap_max_ticks = recycle_gap_ticks;
+        if (pre_ready_ticks > sdc_capture_timing.pre_ready_max_ticks)
+            sdc_capture_timing.pre_ready_max_ticks = pre_ready_ticks;
+        if (fifo_depth > 0xFU)
+            fifo_depth = 0xFU;
+        if (fifo_depth > prior_depth) {
+            sdc_capture_timing.packed_counts =
+                (sdc_capture_timing.packed_counts &
+                 ~SDC_CAPTURE_TIMING_FIFO_MASK) |
+                (fifo_depth << SDC_CAPTURE_TIMING_FIFO_SHIFT);
+        }
+    }
+}
+#else
+void sdc_lld_capture_timing_record_write(uint32_t ticks) {
+    if (sdc_capture_timing_active) {
+        sdc_capture_timing.writer_total_ticks += ticks;
+        if (ticks > sdc_capture_timing.writer_max_ticks)
+            sdc_capture_timing.writer_max_ticks = ticks;
+    }
+}
+#endif
+
+const sdccapturetiming_t* sdc_lld_capture_timing_end(void) {
+    sdc_capture_timing_active = false;
+#if defined(HACKRF_EDGE_SD_CMD6_DIAGNOSTIC)
+    if (SDCD1.cardmode & SDC_MODE_HIGH_SPEED)
+#if defined(HACKRF_EDGE_SD_PREERASE_DIAGNOSTIC)
+        sdc_capture_timing.packed_counts |=
+            SDC_CAPTURE_TIMING_HIGH_SPEED_FLAG;
+#else
+        sdc_capture_timing.transaction_count |=
+            SDC_CAPTURE_TIMING_HIGH_SPEED_FLAG;
+#endif
+#endif
+    return &sdc_capture_timing;
+}
+#endif
+
+#if defined(LPC43XX_M0) && defined(HACKRF_EDGE_SD_PREERASE_DIAGNOSTIC)
+void sdc_lld_capture_preerase_reset(void) {
+    sdc_capture_acmd23_state = SDC_ACMD23_UNKNOWN;
+}
+
+bool_t sdc_lld_capture_wait_ready(SDCDriver* sdcp) {
+    const uint32_t start = halGetCounterValue();
+    const uint32_t timeout_ticks = halGetCounterFrequency() / 4U;
+    uint32_t resp[1];
+
+    while (TRUE) {
+        if (sdc_lld_send_cmd_short_crc(
+                sdcp, MMCSD_CMD_SEND_STATUS, sdcp->rca, resp) ||
+            MMCSD_R1_ERROR(resp[0]))
+            return CH_FAILED;
+        switch (MMCSD_R1_STS(resp[0])) {
+        case MMCSD_STS_TRAN:
+            return CH_SUCCESS;
+        case MMCSD_STS_DATA:
+        case MMCSD_STS_RCV:
+        case MMCSD_STS_PRG:
+            if ((uint32_t)(halGetCounterValue() - start) >= timeout_ticks)
+                return CH_FAILED;
+            chThdSleepMilliseconds(1);
+            break;
+        default:
+            return CH_FAILED;
+        }
+    }
+}
 #endif
 
 /*===========================================================================*/
@@ -212,15 +321,25 @@ static void sdio_cclk_set_400khz(void) {
 }
 
 static void sdio_cclk_set_fast(void) {
-#if defined(PORTAPACK_FAST_SDIO)
+#if defined(PORTAPACK_FAST_SDIO) && \
+    !defined(HACKRF_EDGE_SD_CMD6_DIAGNOSTIC) && \
+    !defined(HACKRF_EDGE_SD_SAFE_DEFAULT_SPEED)
+    /* Preserve the upstream opt-in behavior outside the CMD6 experiment. */
     /* 200MHz / (2 * 2) = 50MHz */
-    /* TODO: Adjust SCU pin configurations: pull-up/down, slew, glitch filter? */
     sdio_cclk_set(2);
 #else
+    /* CMD6 must begin at Default Speed and switch only after validation. */
     /* 200MHz / (2 * 4) = 25MHz */
     sdio_cclk_set(4);
 #endif
 }
+
+#if defined(HACKRF_EDGE_SD_CMD6_DIAGNOSTIC)
+static void sdio_cclk_set_high_speed(void) {
+    /* 200MHz / (2 * 2) = 50MHz, only after a verified CMD6 switch. */
+    sdio_cclk_set(2);
+}
+#endif
 
 static void sdio_width_set_1bit(void) {
     LPC_SDMMC->CTYPE =
@@ -246,6 +365,12 @@ static void sdio_width_set_8bit(void) {
 static void sdio_dma_disable(void) {
     LPC_SDMMC->BMOD &= ~(1U << 7);
 }
+
+#if defined(HACKRF_EDGE_SD_CMD6_DIAGNOSTIC)
+static void sdio_dma_enable(void) {
+    LPC_SDMMC->BMOD |= (1U << 7);
+}
+#endif
 
 static void sdio_dma_interrupts_clear(void) {
     LPC_SDMMC->IDSTS =
@@ -386,14 +511,24 @@ static void sdc_lld_error_cleanup(SDCDriver* sdcp,
         sdc_lld_send_cmd_short_crc(sdcp, MMCSD_CMD_STOP_TRANSMISSION, 0, resp);
 }
 
+#if defined(HACKRF_EDGE_SD_CMD6_DIAGNOSTIC)
+/* Retain one command-issue call site while collecting CMD6 HIL evidence. */
+__attribute__((noinline))
+#endif
 static bool_t sdio_send_command(
     SDCDriver* sdcp,
     const uint32_t cmd_and_flags,
     const uint32_t arg) {
+    uint32_t data_state_flag = (1U << 13); /* WAIT_PRVDATA_COMPLETE */
+    if ((cmd_and_flags & 0x3fU) == MMCSD_CMD_STOP_TRANSMISSION) {
+        /* CMD12 requires STOP_ABORT_CMD instead of WAIT_PRVDATA_COMPLETE. */
+        data_state_flag = (1U << 14);
+    }
+
     LPC_SDMMC->CMDARG = arg;
     LPC_SDMMC->CMD =
-        cmd_and_flags | (1U << 13) /* WAIT_PRVDATA_COMPLETE */
-        | (1U << 31)               /* START_CMD */
+        cmd_and_flags | data_state_flag
+        | (1U << 31) /* START_CMD */
         ;
 
     /* TODO: If waiting for command done, and not caring about HLE, why not
@@ -486,6 +621,52 @@ static bool_t sdc_lld_prepare_read(SDCDriver* sdcp, uint32_t startblk, uint32_t 
     return CH_SUCCESS;
 }
 
+#if defined(LPC43XX_M0) && \
+    defined(HACKRF_EDGE_SD_TIMING_DIAGNOSTIC) && \
+    defined(HACKRF_EDGE_SD_PREERASE_DIAGNOSTIC)
+static sdc_acmd23_result_t sdc_lld_capture_preerase(
+    SDCDriver* sdcp,
+    const uint32_t block_count) {
+    uint32_t resp[1] = {0};
+
+    if (sdc_capture_acmd23_state == SDC_ACMD23_UNSUPPORTED)
+        return SDC_ACMD23_FALLBACK;
+
+    if (sdc_lld_send_cmd_short_crc(
+            sdcp, MMCSD_CMD_APP_CMD, sdcp->rca, resp) ||
+        !sdc_acmd23_cmd55_accepted(
+            true, resp[0], MMCSD_R1_ERROR_MASK, MMCSD_R1_APP_CMD))
+        return SDC_ACMD23_FATAL;
+
+    const bool transport_ok =
+        sdc_lld_send_cmd_short_crc(
+            sdcp, MMCSD_ACMD_SET_WR_BLK_ERASE_COUNT,
+            block_count, resp) == CH_SUCCESS;
+    const sdc_acmd23_result_t result = sdc_acmd23_classify(
+        sdc_capture_acmd23_state,
+        transport_ok,
+        resp[0],
+        MMCSD_R1_ERROR_MASK,
+        MMCSD_R1_ILLEGAL_COMMAND);
+    sdc_capture_acmd23_state =
+        sdc_acmd23_next_state(sdc_capture_acmd23_state, result);
+    return result;
+}
+
+static void sdc_lld_capture_count_preerase(
+    const sdc_acmd23_result_t result) {
+    const uint32_t shift =
+        result == SDC_ACMD23_ACCEPTED
+            ? 0U
+            : SDC_CAPTURE_TIMING_FALLBACK_SHIFT;
+    const uint32_t count =
+        (sdc_capture_timing.packed_counts >> shift) &
+        SDC_CAPTURE_TIMING_COUNT_MASK;
+    if (count < SDC_CAPTURE_TIMING_COUNT_MASK)
+        sdc_capture_timing.packed_counts += 1U << shift;
+}
+#endif
+
 /**
  * @brief   Prepares card to handle write transaction.
  *
@@ -522,6 +703,195 @@ static bool_t sdc_lld_prepare_write(SDCDriver* sdcp, uint32_t startblk, uint32_t
 
     return CH_SUCCESS;
 }
+
+#if defined(HACKRF_EDGE_SD_CMD6_DIAGNOSTIC)
+typedef enum {
+    SDC_CMD6_TRANSFER_ERROR = -1,
+    SDC_CMD6_TRANSFER_OK = 0,
+    SDC_CMD6_TRANSFER_ILLEGAL = 1
+} sdc_cmd6_transfer_result_t;
+
+static void sdc_lld_cmd6_diagnostic_begin(const uint32_t argument) {
+    const uint32_t sequence = SDCD1_cmd6_diagnostic.sequence + 1U;
+
+    SDCD1_cmd6_diagnostic.argument = argument;
+    SDCD1_cmd6_diagnostic.response = 0;
+    SDCD1_cmd6_diagnostic.raw_status = 0;
+    SDCD1_cmd6_diagnostic.dma_status = 0;
+    SDCD1_cmd6_diagnostic.transferred_card_bytes = 0;
+    SDCD1_cmd6_diagnostic.transferred_fifo_bytes = 0;
+    SDCD1_cmd6_diagnostic.descriptor_status = 0;
+    SDCD1_cmd6_diagnostic.block_size = MMCSD_CMD6_STATUS_BYTES;
+    SDCD1_cmd6_diagnostic.byte_count = MMCSD_CMD6_ERRATUM_TRANSFER_BYTES;
+    SDCD1_cmd6_diagnostic.flags = 0;
+    __DMB();
+    SDCD1_cmd6_diagnostic.sequence = sequence;
+}
+
+static void sdc_lld_cmd6_diagnostic_capture(
+    const uint32_t response,
+    const uint32_t raw_status,
+    const uint32_t dma_status,
+    const uint32_t descriptor_status,
+    const uint32_t flags) {
+    SDCD1_cmd6_diagnostic.response = response;
+    SDCD1_cmd6_diagnostic.raw_status = raw_status;
+    SDCD1_cmd6_diagnostic.dma_status = dma_status;
+    SDCD1_cmd6_diagnostic.transferred_card_bytes = LPC_SDMMC->TCBCNT;
+    SDCD1_cmd6_diagnostic.transferred_fifo_bytes = LPC_SDMMC->TBBCNT;
+    SDCD1_cmd6_diagnostic.descriptor_status = descriptor_status;
+    SDCD1_cmd6_diagnostic.block_size = LPC_SDMMC->BLKSIZ;
+    SDCD1_cmd6_diagnostic.byte_count = LPC_SDMMC->BYTCNT;
+    SDCD1_cmd6_diagnostic.flags = flags;
+    __DMB();
+}
+
+static bool_t sdc_lld_cmd6_wait_raw_status(
+    SDCDriver* sdcp,
+    uint32_t* const status) {
+    bool_t timed_out = FALSE;
+
+    chSysLock();
+    if (LPC_SDMMC->INTMASK != 0) {
+        sdcp->thread = chThdSelf();
+        if (chSchGoSleepTimeoutS(
+                THD_STATE_SUSPENDED, MS2ST(100)) == RDY_TIMEOUT) {
+            sdcp->thread = NULL;
+            timed_out = TRUE;
+        }
+    }
+    *status = LPC_SDMMC->RINTSTS;
+    sdio_interrupts_set_mask(0);
+    chSysUnlock();
+    return timed_out ? CH_FAILED : CH_SUCCESS;
+}
+
+/*
+ * LPC4320 erratum SD/MMC.1: a correct 64-byte CMD6 status always raises
+ * DCRC.  Receiving 72 bytes captures the four interleaved data-line CRCs so
+ * they can be verified in software.  DCRC is an expected terminal interrupt,
+ * but it is accepted only when DMA completion evidence and all four software
+ * CRCs agree.  Every unrelated data-path fault remains fatal.
+ */
+static sdc_cmd6_transfer_result_t sdc_lld_cmd6_transfer(
+    SDCDriver* sdcp,
+    const uint32_t argument,
+    uint8_t transfer[MMCSD_CMD6_ERRATUM_TRANSFER_BYTES]) {
+    LPC_SDMMC_DESC_Type desc[1];
+    uint32_t resp[1] = {0};
+    uint32_t raw_status = 0;
+    uint32_t dma_status = 0;
+    uint32_t diagnostic_flags = 0;
+    bool_t wait_failed;
+    bool_t status_valid;
+    bool_t crc_valid;
+    size_t i;
+
+    sdc_lld_cmd6_diagnostic_begin(argument);
+    for (i = 0; i < MMCSD_CMD6_ERRATUM_TRANSFER_BYTES; ++i)
+        transfer[i] = (uint8_t)(0xA5U ^ (uint8_t)i);
+
+    if (_sdc_wait_for_transfer_state(sdcp))
+        return SDC_CMD6_TRANSFER_ERROR;
+
+    sdio_reset_dma_and_fifo();
+    sdio_dma_interrupts_clear();
+    if (sdc_llc_prepare_descriptors_chained(
+            desc, 1U, transfer, MMCSD_CMD6_ERRATUM_TRANSFER_BYTES) == CH_FAILED)
+        return SDC_CMD6_TRANSFER_ERROR;
+
+    LPC_SDMMC->DBADDR = (uint32_t)&desc;
+    sdio_interrupts_clear();
+    sdio_interrupts_set_mask(
+        (1U << 3)     /* DTO: Data transfer over */
+        | (1U << 7)   /* DCRC: expected SD/MMC.1 terminal indication */
+        | (1U << 9)   /* DRTO: Data read time-out */
+        | (1U << 10)  /* HTO: Data starvation-by-host time-out */
+        | (1U << 11)  /* FRUN: FIFO underrun/overrun */
+        | (1U << 12)  /* HLE: Hardware locked write error */
+        | (1U << 13)  /* SBE: Start-bit error */
+        | (1U << 15)  /* EBE: End-bit error */
+    );
+    LPC_SDMMC->BLKSIZ = MMCSD_CMD6_STATUS_BYTES;
+    LPC_SDMMC->BYTCNT = MMCSD_CMD6_ERRATUM_TRANSFER_BYTES;
+
+    if (sdc_lld_send_cmd_data_read(
+            sdcp, MMCSD_CMD_SWITCH_FUNC, argument, resp) == CH_FAILED) {
+        __DMB();
+        sdc_lld_cmd6_diagnostic_capture(
+            resp[0], LPC_SDMMC->RINTSTS, LPC_SDMMC->IDSTS,
+            desc[0].DESC0, 0);
+        goto error;
+    }
+
+    if (sdc_cmd6_r1_is_illegal_only(
+            resp[0], MMCSD_R1_ERROR_MASK, MMCSD_R1_ILLEGAL_COMMAND)) {
+        __DMB();
+        sdc_lld_cmd6_diagnostic_capture(
+            resp[0], LPC_SDMMC->RINTSTS, LPC_SDMMC->IDSTS,
+            desc[0].DESC0, SDC_CMD6_DIAG_ILLEGAL_COMMAND);
+        sdio_interrupts_set_mask(0);
+        sdio_interrupts_clear();
+        sdio_dma_interrupts_clear();
+        sdio_reset_dma_and_fifo();
+        return SDC_CMD6_TRANSFER_ILLEGAL;
+    }
+    if (sdc_cmd6_r1_has_error(resp[0], MMCSD_R1_ERROR_MASK)) {
+        __DMB();
+        sdc_lld_cmd6_diagnostic_capture(
+            resp[0], LPC_SDMMC->RINTSTS, LPC_SDMMC->IDSTS,
+            desc[0].DESC0, 0);
+        goto error;
+    }
+
+    wait_failed =
+        sdc_lld_cmd6_wait_raw_status(sdcp, &raw_status) == CH_FAILED;
+    __DMB();
+    dma_status = LPC_SDMMC->IDSTS;
+    if (wait_failed)
+        diagnostic_flags |= SDC_CMD6_DIAG_WAIT_TIMEOUT;
+
+    status_valid = sdc_cmd6_completion_status_valid(
+        raw_status, dma_status, desc[0].DESC0, LPC_SDMMC->TBBCNT);
+    if (status_valid)
+        diagnostic_flags |= SDC_CMD6_DIAG_STATUS_VALID;
+
+    crc_valid = sdc_cmd6_software_crc_valid(transfer);
+    if (crc_valid)
+        diagnostic_flags |= SDC_CMD6_DIAG_SOFTWARE_CRC_VALID;
+
+    if (!wait_failed && status_valid && crc_valid)
+        diagnostic_flags |= SDC_CMD6_DIAG_ACCEPTED;
+
+    sdc_lld_cmd6_diagnostic_capture(
+        resp[0], raw_status, dma_status, desc[0].DESC0, diagnostic_flags);
+
+    if (wait_failed) {
+        sdcp->errors |= SDC_DATA_TIMEOUT;
+        goto error;
+    }
+    if (!status_valid) {
+        sdc_lld_collect_errors(sdcp, raw_status);
+        goto error;
+    }
+    if (!crc_valid) {
+        sdcp->errors |= SDC_DATA_CRC_ERROR;
+        goto error;
+    }
+
+    /* DCRC and IDMAC CES summarize the documented LPC4320 false positive. */
+    sdio_interrupts_clear();
+    sdio_dma_interrupts_clear();
+    return SDC_CMD6_TRANSFER_OK;
+
+error:
+    sdc_lld_error_cleanup(sdcp, 1U, resp);
+    /* A forced-25 MHz reconnect must retain a usable internal DMA engine. */
+    sdio_reset_dma_and_fifo();
+    sdio_dma_enable();
+    return SDC_CMD6_TRANSFER_ERROR;
+}
+#endif
 
 /*===========================================================================*/
 /* Driver interrupt handlers.                                                */
@@ -678,6 +1048,61 @@ void sdc_lld_set_data_clk(SDCDriver* sdcp) {
     (void)sdcp;
     sdio_cclk_set_fast();
 }
+
+#if defined(HACKRF_EDGE_SD_CMD6_DIAGNOSTIC)
+sdccmd6result_t sdc_lld_try_high_speed(SDCDriver* sdcp) {
+    uint8_t transfer[MMCSD_CMD6_ERRATUM_TRANSFER_BYTES]
+        __attribute__((aligned(4)));
+    sdc_cmd6_transfer_result_t transfer_result;
+    sdc_cmd6_status_result_t status_result;
+    unsigned query_attempt;
+
+    for (query_attempt = 0; query_attempt < 10U; ++query_attempt) {
+        transfer_result = sdc_lld_cmd6_transfer(
+            sdcp, MMCSD_CMD6_CHECK_HIGH_SPEED, transfer);
+        if (transfer_result == SDC_CMD6_TRANSFER_ILLEGAL)
+            return SDC_CMD6_NEGOTIATION_UNSUPPORTED;
+        if (transfer_result != SDC_CMD6_TRANSFER_OK)
+            return SDC_CMD6_NEGOTIATION_ERROR;
+
+        status_result = sdc_cmd6_query_high_speed(transfer);
+        if (status_result != SDC_CMD6_STATUS_BUSY)
+            break;
+        if (query_attempt != 9U)
+            chThdSleepMilliseconds(10);
+    }
+    if (status_result == SDC_CMD6_STATUS_BUSY)
+        return SDC_CMD6_NEGOTIATION_BUSY;
+    if (status_result == SDC_CMD6_STATUS_UNSUPPORTED)
+        return SDC_CMD6_NEGOTIATION_UNSUPPORTED;
+    if (status_result != SDC_CMD6_STATUS_READY)
+        return SDC_CMD6_NEGOTIATION_ERROR;
+
+    transfer_result = sdc_lld_cmd6_transfer(
+        sdcp, MMCSD_CMD6_SWITCH_HIGH_SPEED, transfer);
+    if (transfer_result != SDC_CMD6_TRANSFER_OK)
+        return SDC_CMD6_NEGOTIATION_ERROR;
+
+    status_result = sdc_cmd6_confirm_high_speed(transfer);
+    if (status_result == SDC_CMD6_STATUS_SELECTED)
+        return SDC_CMD6_NEGOTIATION_ENABLED;
+    if (status_result == SDC_CMD6_STATUS_UNSUPPORTED)
+        return SDC_CMD6_NEGOTIATION_UNSUPPORTED;
+    return SDC_CMD6_NEGOTIATION_ERROR;
+}
+
+void sdc_lld_set_high_speed_clk(SDCDriver* sdcp) {
+    (void)sdcp;
+    /*
+     * Eight 25 MHz card clocks are 320 ns. The SDIO divider and the M0 run
+     * from the same fixed 200 MHz application clock, so 200 counter ticks
+     * provide a conservative one-microsecond settling interval.
+     */
+    halPolledDelay(200U);
+    sdio_cclk_set_high_speed();
+}
+
+#endif
 
 /**
  * @brief   Stops the SDIO clock.
@@ -910,9 +1335,46 @@ error:
 bool_t sdc_lld_write_aligned(SDCDriver* sdcp, uint32_t startblk, const uint8_t* buf, uint32_t n) {
     chDbgCheck((n <= (LPC_SDC_SDIO_DESCRIPTOR_COUNT * LPC_SDC_SDIO_MAX_DESCRIPTOR_BYTES / MMCSD_BLOCK_SIZE)), "max transaction size");
 
+#if defined(LPC43XX_M0) && defined(HACKRF_EDGE_SD_TIMING_DIAGNOSTIC)
+    const bool capture_timing_write = sdc_capture_timing_active;
+    const uint32_t capture_ready_start =
+        capture_timing_write ? halGetCounterValue() : 0U;
+#endif
+#if defined(LPC43XX_M0) && \
+    defined(HACKRF_EDGE_SD_TIMING_DIAGNOSTIC) && \
+    defined(HACKRF_EDGE_SD_PREERASE_DIAGNOSTIC)
+    const bool capture_preerase_write = capture_timing_write && n > 1U;
+    sdc_acmd23_result_t capture_preerase_result = SDC_ACMD23_FALLBACK;
+#endif
+
     /* Checks for errors and waits for the card to be ready for writing.*/
     if (_sdc_wait_for_transfer_state(sdcp))
         return CH_FAILED;
+
+#if defined(LPC43XX_M0) && defined(HACKRF_EDGE_SD_TIMING_DIAGNOSTIC)
+    const uint32_t capture_transfer_start =
+        capture_timing_write ? halGetCounterValue() : 0U;
+    const uint32_t capture_ready_ticks =
+        capture_transfer_start - capture_ready_start;
+#if defined(HACKRF_EDGE_SD_PREERASE_DIAGNOSTIC)
+    if (capture_timing_write &&
+        capture_ready_ticks > sdc_capture_timing.residual_ready_max_ticks)
+        sdc_capture_timing.residual_ready_max_ticks = capture_ready_ticks;
+#endif
+#endif
+
+#if defined(LPC43XX_M0) && \
+    defined(HACKRF_EDGE_SD_TIMING_DIAGNOSTIC) && \
+    defined(HACKRF_EDGE_SD_PREERASE_DIAGNOSTIC)
+    if (capture_preerase_write) {
+        capture_preerase_result = sdc_lld_capture_preerase(sdcp, n);
+        if (capture_preerase_result == SDC_ACMD23_FATAL) {
+            sdc_capture_timing.packed_counts |=
+                SDC_CAPTURE_TIMING_HINT_FATAL_FLAG;
+            return CH_FAILED;
+        }
+    }
+#endif
 
     sdio_reset_dma_and_fifo();
 
@@ -946,6 +1408,31 @@ bool_t sdc_lld_write_aligned(SDCDriver* sdcp, uint32_t startblk, const uint8_t* 
         goto error;
     if (sdc_lld_wait_transaction_end(sdcp, n, resp) == TRUE)
         goto error;
+
+#if defined(LPC43XX_M0) && defined(HACKRF_EDGE_SD_TIMING_DIAGNOSTIC)
+    if (capture_timing_write) {
+        const uint32_t transfer_ticks =
+            halGetCounterValue() - capture_transfer_start;
+#if defined(HACKRF_EDGE_SD_PREERASE_DIAGNOSTIC)
+        if (transfer_ticks > sdc_capture_timing.transfer_max_ticks)
+            sdc_capture_timing.transfer_max_ticks = transfer_ticks;
+#else
+        sdc_capture_timing.ready_total_ticks += capture_ready_ticks;
+        sdc_capture_timing.transfer_total_ticks += transfer_ticks;
+        if (capture_ready_ticks > sdc_capture_timing.ready_max_ticks)
+            sdc_capture_timing.ready_max_ticks = capture_ready_ticks;
+        if (transfer_ticks > sdc_capture_timing.transfer_max_ticks)
+            sdc_capture_timing.transfer_max_ticks = transfer_ticks;
+        ++sdc_capture_timing.transaction_count;
+#endif
+    }
+#endif
+#if defined(LPC43XX_M0) && \
+    defined(HACKRF_EDGE_SD_TIMING_DIAGNOSTIC) && \
+    defined(HACKRF_EDGE_SD_PREERASE_DIAGNOSTIC)
+    if (capture_preerase_write)
+        sdc_lld_capture_count_preerase(capture_preerase_result);
+#endif
 
     return CH_SUCCESS;
 

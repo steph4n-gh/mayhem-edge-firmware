@@ -53,6 +53,8 @@
  * @brief   Mask of error bits in R1 responses.
  */
 #define MMCSD_R1_ERROR_MASK             0xFDFFE008
+#define MMCSD_R1_ILLEGAL_COMMAND        (1U << 22)
+#define MMCSD_R1_APP_CMD                (1U << 5)
 
 /**
  * @brief   Fixed pattern for CMD8.
@@ -83,6 +85,7 @@
 #define MMCSD_CMD_ALL_SEND_CID          2
 #define MMCSD_CMD_SEND_RELATIVE_ADDR    3
 #define MMCSD_CMD_SET_BUS_WIDTH         6
+#define MMCSD_CMD_SWITCH_FUNC           6
 #define MMCSD_CMD_SEL_DESEL_CARD        7
 #define MMCSD_CMD_SEND_IF_COND          8
 #define MMCSD_CMD_SEND_CSD              9
@@ -93,6 +96,7 @@
 #define MMCSD_CMD_READ_SINGLE_BLOCK     17
 #define MMCSD_CMD_READ_MULTIPLE_BLOCK   18
 #define MMCSD_CMD_SET_BLOCK_COUNT       23
+#define MMCSD_ACMD_SET_WR_BLK_ERASE_COUNT 23
 #define MMCSD_CMD_WRITE_BLOCK           24
 #define MMCSD_CMD_WRITE_MULTIPLE_BLOCK  25
 #define MMCSD_CMD_ERASE_RW_BLK_START    32
@@ -102,6 +106,16 @@
 #define MMCSD_CMD_LOCK_UNLOCK           42
 #define MMCSD_CMD_APP_CMD               55
 #define MMCSD_CMD_READ_OCR              58
+/** @} */
+
+/**
+ * @name    SD Switch Function (CMD6) constants
+ * @{
+ */
+#define MMCSD_CMD6_CHECK_HIGH_SPEED       0x00FFFFF1U
+#define MMCSD_CMD6_SWITCH_HIGH_SPEED      0x80FFFFF1U
+#define MMCSD_CMD6_STATUS_BYTES           64U
+#define MMCSD_CMD6_ERRATUM_TRANSFER_BYTES 72U
 /** @} */
 
 /**

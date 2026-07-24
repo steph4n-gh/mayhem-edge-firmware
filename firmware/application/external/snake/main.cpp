@@ -23,7 +23,7 @@ __attribute__((section(".external_app.app_snake.application_information"), used)
     (uint8_t*)0x00000000,
     ui::external_app::snake::initialize_app,
     CURRENT_HEADER_VERSION,
-    VERSION_MD5,
+    {},
     "Snake",
     {
         0x00,

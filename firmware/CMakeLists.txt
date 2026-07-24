@@ -1,4 +1,5 @@
 # Copyright 2016 Jared Boone <jared@sharebrained.com>
+# Modified for HackRF Edge in 2026 by HackRF Edge contributors.
 #
 # This file is part of PortaPack.
 #
@@ -30,12 +31,64 @@ set(CHIBIOS_PORTAPACK ${PROJECT_SOURCE_DIR}/chibios-portapack)
 set(EXTRACT_CPLD_DATA ${PROJECT_SOURCE_DIR}/tools/extract_cpld_data.py)
 set(EXPORT_EXTERNAL_APP_IMAGES ${PROJECT_SOURCE_DIR}/tools/export_external_apps.py)
 set(MAKE_SPI_IMAGE ${PROJECT_SOURCE_DIR}/tools/make_spi_image.py)
+set(SPI_IMAGE_SIZE_POLICY ${PROJECT_SOURCE_DIR}/tools/spi_image_size_policy.py)
 set(MAKE_IMAGE_CHUNK ${PROJECT_SOURCE_DIR}/tools/make_image_chunk.py)
+set(VERIFY_IMAGE_CHUNKS ${PROJECT_SOURCE_DIR}/tools/verify_image_chunks.py)
 set(LZ4 lz4)
+
+if(NOT MAYHEM_LZ4_COMPRESSION_LEVEL MATCHES "^(1[0-2]|[1-9])$")
+	message(FATAL_ERROR "MAYHEM_LZ4_COMPRESSION_LEVEL must be an integer from 1 through 12")
+endif()
+set(MAYHEM_LZ4_ARGS -f -${MAYHEM_LZ4_COMPRESSION_LEVEL})
+if(MAYHEM_LZ4_NO_FRAME_CRC)
+	list(APPEND MAYHEM_LZ4_ARGS --no-frame-crc)
+endif()
+message(STATUS "Embedded LZ4 arguments: ${MAYHEM_LZ4_ARGS}")
 
 set(FIRMWARE_NAME portapack-mayhem-firmware)
 set(FIRMWARE_FILENAME ${FIRMWARE_NAME}.bin)
 set(PPFW_FILENAME "portapack-mayhem_OCI.ppfw.tar")
+
+# Normalize package metadata so identical inputs produce identical .ppfw archives.
+# Honor the standard reproducible-builds override, otherwise use the source
+# commit time. Source exports without Git metadata fall back to the Unix epoch.
+if(NOT DEFINED PPFW_SOURCE_DATE_EPOCH OR PPFW_SOURCE_DATE_EPOCH STREQUAL "")
+	set(PPFW_SOURCE_DATE_EPOCH "$ENV{SOURCE_DATE_EPOCH}")
+endif()
+if(PPFW_SOURCE_DATE_EPOCH STREQUAL "")
+	execute_process(
+		COMMAND git show -s --format=%ct HEAD
+		WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+		OUTPUT_VARIABLE PPFW_SOURCE_DATE_EPOCH
+		OUTPUT_STRIP_TRAILING_WHITESPACE
+		ERROR_QUIET
+	)
+endif()
+if(NOT PPFW_SOURCE_DATE_EPOCH MATCHES "^[0-9]+$")
+	set(PPFW_SOURCE_DATE_EPOCH 0)
+endif()
+message(STATUS "PPFW SOURCE_DATE_EPOCH: ${PPFW_SOURCE_DATE_EPOCH}")
+
+set(MAKE_SPI_IMAGE_SIZE_POLICY_ARGS)
+if(MAYHEM_AGGREGATE_SIZE_POLICY)
+	if(NOT MAYHEM_AGGREGATE_MIN_REMAINING_BYTES MATCHES "^[0-9]+$")
+		message(FATAL_ERROR "MAYHEM_AGGREGATE_MIN_REMAINING_BYTES must be a non-negative integer")
+	endif()
+	if(NOT MAYHEM_AGGREGATE_WARNING_REMAINING_BYTES MATCHES "^[0-9]+$")
+		message(FATAL_ERROR "MAYHEM_AGGREGATE_WARNING_REMAINING_BYTES must be a non-negative integer")
+	endif()
+	if(MAYHEM_AGGREGATE_WARNING_REMAINING_BYTES LESS MAYHEM_AGGREGATE_MIN_REMAINING_BYTES)
+		message(FATAL_ERROR "Aggregate maintenance warning threshold must be at least the hard minimum")
+	endif()
+
+	list(APPEND MAKE_SPI_IMAGE_SIZE_POLICY_ARGS
+		--minimum-remaining-bytes=${MAYHEM_AGGREGATE_MIN_REMAINING_BYTES}
+		--maintenance-warning-bytes=${MAYHEM_AGGREGATE_WARNING_REMAINING_BYTES}
+	)
+	message(STATUS
+		"Aggregate flash policy: minimum ${MAYHEM_AGGREGATE_MIN_REMAINING_BYTES} bytes; "
+		"maintenance warning below ${MAYHEM_AGGREGATE_WARNING_REMAINING_BYTES} bytes")
+endif()
 
 # In our current build container cmake need a little help to get the version :)
 if(NOT DEFINED ${CMAKE_CXX_COMPILER_VERSION})
@@ -52,8 +105,8 @@ endif()
 configure_file(flashsize.h.in flashsize.h)
 add_compile_options(-include ${CMAKE_CURRENT_BINARY_DIR}/flashsize.h)
 
-add_subdirectory(application)
 add_subdirectory(baseband)
+add_subdirectory(application)
 add_subdirectory(standalone)
 add_subdirectory(test)
 
@@ -67,13 +120,13 @@ if(BOARD STREQUAL "PRALINE")
 	# NOTE: Dependencies break if the .bin files aren't included in DEPENDS. WTF, CMake?
 	add_custom_command(
 		OUTPUT ${FIRMWARE_FILENAME}
-		COMMAND ${MAKE_SPI_IMAGE} ${application_BINARY_DIR}/application.bin ${baseband_BINARY_DIR}/baseband.img ${FIRMWARE_FILENAME} ${FLASH_BYTES_LIMIT_SIZE}
+		COMMAND ${MAKE_SPI_IMAGE} ${application_BINARY_DIR}/application.bin ${baseband_BINARY_DIR}/baseband.img ${FIRMWARE_FILENAME} ${FLASH_BYTES_LIMIT_SIZE} ${MAKE_SPI_IMAGE_SIZE_POLICY_ARGS}
 		# PRALINE: Append FPGA bitstream to firmware at offset 0x380000
 		# The base firmware is 3.5MB, FPGA bitstream gets appended at the end of it, final size is 4MB
 		COMMAND ${CMAKE_COMMAND} -E echo "Appending PRALINE FPGA bitstream to firmware..."
 		COMMAND python3 ${APPEND_FPGA_SCRIPT} ${FIRMWARE_FILENAME} ${PRALINE_FPGA_BIN} ${FIRMWARE_FILENAME}.tmp ${PRALINE_FINAL_SIZE}
 		COMMAND ${CMAKE_COMMAND} -E rename ${FIRMWARE_FILENAME}.tmp ${FIRMWARE_FILENAME}
-		DEPENDS baseband application ${MAKE_SPI_IMAGE}
+		DEPENDS baseband application ${MAKE_SPI_IMAGE} ${SPI_IMAGE_SIZE_POLICY}
 			${baseband_BINARY_DIR}/baseband.img ${application_BINARY_DIR}/application.bin
 			${PRALINE_FPGA_BIN} ${APPEND_FPGA_SCRIPT}
 		VERBATIM
@@ -82,8 +135,8 @@ else() # Sadly this part had to be duplicated (or at least I couldn't find a bet
 	# NOTE: Dependencies break if the .bin files aren't included in DEPENDS. WTF, CMake?
 	add_custom_command(
 		OUTPUT ${FIRMWARE_FILENAME}
-		COMMAND ${MAKE_SPI_IMAGE} ${application_BINARY_DIR}/application.bin ${baseband_BINARY_DIR}/baseband.img ${FIRMWARE_FILENAME} ${FLASH_BYTES_LIMIT_SIZE}
-		DEPENDS baseband application ${MAKE_SPI_IMAGE}
+		COMMAND ${MAKE_SPI_IMAGE} ${application_BINARY_DIR}/application.bin ${baseband_BINARY_DIR}/baseband.img ${FIRMWARE_FILENAME} ${FLASH_BYTES_LIMIT_SIZE} ${MAKE_SPI_IMAGE_SIZE_POLICY_ARGS}
+		DEPENDS baseband application ${MAKE_SPI_IMAGE} ${SPI_IMAGE_SIZE_POLICY}
 			${baseband_BINARY_DIR}/baseband.img ${application_BINARY_DIR}/application.bin
 		VERBATIM
 	)
@@ -129,7 +182,7 @@ add_custom_command(
 	COMMAND mkdir -p firmware_tar/APPS
 	COMMAND cp application/*.ppma firmware_tar/APPS
 	COMMAND cp standalone/*/*.ppmp firmware_tar/APPS
-	COMMAND cd firmware_tar && tar -cvaf ../${PPFW_FILENAME} *
+	COMMAND cd firmware_tar && tar --sort=name --format=ustar --mtime=@${PPFW_SOURCE_DATE_EPOCH} --owner=0 --group=0 --numeric-owner --mode=u+rwX,go+rX,go-w -cvf ../${PPFW_FILENAME} *
 	DEPENDS firmware ${FIRMWARE_FILENAME} standalone_apps
 	# Dont use VERBATIM here as it prevents usage of globbing (*)
 	# There shouldnt be any funny business in the filenames above :)
@@ -168,4 +221,3 @@ add_custom_target(
 	release
 	DEPENDS MD5SUMS SHA256SUMS
 )
-

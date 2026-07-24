@@ -148,9 +148,7 @@ bool HardResetView::is_bad_app(const std::filesystem::path& file_path, bool is_p
         auto readResult = app.read(&app_info, sizeof(application_information_t));
         if (!readResult || readResult.value() != sizeof(application_information_t)) {
             is_bad = true;
-        } else if (app_info.header_version != CURRENT_HEADER_VERSION) {
-            is_bad = true;
-        } else if (VERSION_MD5 != app_info.app_version) {
+        } else if (!external_app_is_compatible(app_info)) {
             is_bad = true;
         } else {
             // --- CHECKSUM VALIDATION ---

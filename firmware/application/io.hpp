@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2016 Jared Boone, ShareBrained Technology, Inc.
+ * Modified for HackRF Edge in 2026 by HackRF Edge contributors.
  *
  * This file is part of PortaPack.
  *
@@ -35,6 +36,7 @@ class Reader {
 class Writer {
    public:
     virtual File::Result<File::Size> write(const void* const buffer, const File::Size bytes) = 0;
+    virtual Optional<File::Error> sync() { return {}; }
     virtual ~Writer() = default;
 };
 

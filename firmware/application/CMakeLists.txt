@@ -337,6 +337,16 @@ set(CPPSRC
 
 set_source_files_properties(${CPPSRC} PROPERTIES COMPILE_FLAGS -flto) # Add lto flag to the non-external sources only
 
+if(HACKRF_EDGE_SD_CMD6_DIAGNOSTIC OR HACKRF_EDGE_SD_PREERASE_DIAGNOSTIC)
+	# Let the linker fold the diagnostic's cross-layer negotiation wrappers.
+	# This is scoped to the two SD C units and keeps normal Mayhem builds intact.
+	set_source_files_properties(
+		${CHIBIOS}/os/hal/src/sdc.c
+		${CHIBIOS_PORTAPACK}/os/hal/platforms/LPC43xx/sdc_lld.c
+		PROPERTIES COMPILE_FLAGS -flto
+	)
+endif()
+
 list (APPEND CPPSRC ${EXTCPPSRC}) # Append external sources after setting lto flag to internal ones
 
 # C sources to be compiled in ARM mode regardless of the global setting.
@@ -419,7 +429,58 @@ set(CPPWARN "-Wall -Wextra -Wno-psabi")
 if(NOT DEFINED BOARD)
     set(BOARD "HACKRF_ONE")
 endif()
-set(DDEFS "-DLPC43XX -DLPC43XX_M0 -D__NEWLIB__ -D${BOARD} -DTOOLCHAIN_GCC -DTOOLCHAIN_GCC_ARM -D_RANDOM_TCC=0 -D'VERSION_STRING=\"${VERSION}\"' -DVERSION_MD5=${VERSION_MD5} -D'GCC_VERSION_MISMATCH=${GCC_VERSION_MISMATCH}'")
+set(DDEFS "-DLPC43XX -DLPC43XX_M0 -D__NEWLIB__ -D${BOARD} -DTOOLCHAIN_GCC -DTOOLCHAIN_GCC_ARM -D_RANDOM_TCC=0 -D'VERSION_STRING=\"${VERSION}\"' -D'GCC_VERSION_MISMATCH=${GCC_VERSION_MISMATCH}'")
+if(HACKRF_EDGE_SD_TIMING_DIAGNOSTIC)
+	set(DDEFS "${DDEFS} -DHACKRF_EDGE_SD_TIMING_DIAGNOSTIC=1")
+endif()
+if(HACKRF_EDGE_SD_PREERASE_DIAGNOSTIC)
+	if(NOT HACKRF_EDGE_SD_TIMING_DIAGNOSTIC)
+		message(FATAL_ERROR "SD pre-erase diagnostics require SD timing diagnostics")
+	endif()
+	set(DDEFS "${DDEFS} -DHACKRF_EDGE_SD_PREERASE_DIAGNOSTIC=1")
+endif()
+if(HACKRF_EDGE_M0_SPILL_DIAGNOSTIC)
+	if(NOT HACKRF_EDGE_SD_PREERASE_DIAGNOSTIC)
+		message(FATAL_ERROR "M0 spill diagnostics require SD pre-erase diagnostics")
+	endif()
+	set(DDEFS "${DDEFS} -DHACKRF_EDGE_M0_SPILL_DIAGNOSTIC=1")
+endif()
+if(HACKRF_EDGE_PRECISION_RX_HYBRID_POOL_DIAGNOSTIC)
+	if(NOT HACKRF_EDGE_M0_SPILL_DIAGNOSTIC)
+		message(FATAL_ERROR "Precision RX hybrid pool requires M0 spill diagnostics")
+	endif()
+	set(DDEFS "${DDEFS} -DHACKRF_EDGE_PRECISION_RX_HYBRID_POOL_DIAGNOSTIC=1")
+endif()
+if(HACKRF_EDGE_PRECISION_RX_DMA_LEASE_DIAGNOSTIC)
+	if(NOT HACKRF_EDGE_PRECISION_RX_HYBRID_POOL_DIAGNOSTIC)
+		message(FATAL_ERROR "Precision RX DMA leasing requires the p10 hybrid pool")
+	endif()
+	set(DDEFS "${DDEFS} -DHACKRF_EDGE_PRECISION_RX_DMA_LEASE_DIAGNOSTIC=1")
+endif()
+if(HACKRF_EDGE_PRECISION_RX_RATE_TRANSACTION_DIAGNOSTIC)
+	if(NOT HACKRF_EDGE_PRECISION_RX_DMA_LEASE_DIAGNOSTIC)
+		message(FATAL_ERROR "Precision RX rate transactions require the p11 DMA lease")
+	endif()
+	set(DDEFS "${DDEFS} -DHACKRF_EDGE_PRECISION_RX_RATE_TRANSACTION_DIAGNOSTIC=1")
+endif()
+if(HACKRF_EDGE_PRECISION_RX_SEGMENTED_PPMA_DIAGNOSTIC)
+	if(NOT HACKRF_EDGE_PRECISION_RX_RATE_TRANSACTION_DIAGNOSTIC)
+		message(FATAL_ERROR "Precision RX segmented PPMA requires the p12 rate transaction profile")
+	endif()
+	set(DDEFS "${DDEFS} -DHACKRF_EDGE_PRECISION_RX_SEGMENTED_PPMA_DIAGNOSTIC=1")
+endif()
+if(HACKRF_EDGE_SD_FAST_RESERVE_EXPERIMENT)
+	set(DDEFS "${DDEFS} -DHACKRF_EDGE_SD_FAST_RESERVE_EXPERIMENT=1")
+endif()
+if(HACKRF_EDGE_SD_CMD6_DIAGNOSTIC)
+	set(DDEFS "${DDEFS} -DHACKRF_EDGE_SD_CMD6_DIAGNOSTIC=1")
+endif()
+if(HACKRF_EDGE_SD_SAFE_DEFAULT_SPEED)
+	if(HACKRF_EDGE_SD_CMD6_DIAGNOSTIC)
+		message(FATAL_ERROR "Safe Default Speed and CMD6 diagnostics are mutually exclusive")
+	endif()
+	set(DDEFS "${DDEFS} -DHACKRF_EDGE_SD_SAFE_DEFAULT_SPEED=1")
+endif()
 
 # List all default ASM defines here, like -D_DEBUG=1
 set(DADEFS)
@@ -493,7 +554,57 @@ add_executable(${PROJECT_NAME}.elf ${CSRC} ${CPPSRC} ${ASMSRC})
 target_link_options(${PROJECT_NAME}.elf PRIVATE
     "LINKER:--defsym,LD_FLASH_SIZE=${FLASH_BYTES_LIMIT_SIZE}"
 )
-set_target_properties(${PROJECT_NAME}.elf PROPERTIES LINK_DEPENDS ${LDSCRIPT})
+set(EXTERNAL_APP_EXPORT_ARGS)
+set(EXTERNAL_APP_VERIFY_COMMAND)
+set(EXTERNAL_APP_VERIFY_DEPENDS)
+set(PRECISION_RX_AUX_DISPATCH_SOURCE
+	${CMAKE_CURRENT_LIST_DIR}/external/precision_rx_legacy.ld)
+if(HACKRF_EDGE_PRECISION_RX_SEGMENTED_PPMA_DIAGNOSTIC)
+	set(PRECISION_RX_SEGMENTED_GEOMETRY
+		${CMAKE_CURRENT_LIST_DIR}/external/precision_rx_segmented_geometry.cmake)
+	include(${PRECISION_RX_SEGMENTED_GEOMETRY})
+	configure_file(
+		${CMAKE_CURRENT_LIST_DIR}/precision_rx_segmented_geometry.hpp.in
+		${CMAKE_CURRENT_BINARY_DIR}/precision_rx_segmented_geometry.hpp
+		@ONLY
+	)
+	set(PRECISION_RX_AUX_DISPATCH_SOURCE
+		${CMAKE_CURRENT_LIST_DIR}/external/precision_rx_segmented.ld)
+	list(APPEND EXTERNAL_APP_EXPORT_ARGS --precision-rx-segmented)
+	set(PRECISION_RX_SEGMENTED_VERIFIER
+		${CMAKE_CURRENT_LIST_DIR}/../tools/verify_precision_rx_segmented_ppma.py)
+	list(APPEND EXTERNAL_APP_VERIFY_COMMAND
+		COMMAND python3 ${PRECISION_RX_SEGMENTED_VERIFIER}
+			--elf ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}.elf
+			--ppma ${CMAKE_CURRENT_BINARY_DIR}/precision_rx.ppma
+			--m4 ${baseband_BINARY_DIR}/PRX1.bin
+			--objcopy ${CMAKE_OBJCOPY}
+			--objdump ${CMAKE_OBJDUMP}
+			--nm ${CMAKE_NM}
+	)
+	list(APPEND EXTERNAL_APP_VERIFY_DEPENDS
+		${PRECISION_RX_SEGMENTED_VERIFIER}
+		${PRECISION_RX_SEGMENTED_GEOMETRY}
+		${CMAKE_CURRENT_LIST_DIR}/precision_rx_segmented_geometry.hpp.in
+		${CMAKE_CURRENT_LIST_DIR}/external/precision_rx_segmented.ld)
+endif()
+set(PRECISION_RX_AUX_DISPATCH
+	${CMAKE_BINARY_DIR}/precision_rx_aux_dispatch.ld)
+if(HACKRF_EDGE_PRECISION_RX_SEGMENTED_PPMA_DIAGNOSTIC)
+	configure_file(
+		${PRECISION_RX_AUX_DISPATCH_SOURCE}
+		${PRECISION_RX_AUX_DISPATCH}
+		@ONLY
+	)
+else()
+	configure_file(
+		${PRECISION_RX_AUX_DISPATCH_SOURCE}
+		${PRECISION_RX_AUX_DISPATCH}
+		COPYONLY
+	)
+endif()
+set_target_properties(${PROJECT_NAME}.elf PROPERTIES LINK_DEPENDS
+	"${LDSCRIPT};${CMAKE_CURRENT_LIST_DIR}/external/external.ld;${PRECISION_RX_AUX_DISPATCH}")
 add_definitions(${DEFS})
 include_directories(. ${INCDIR})
 link_directories(${LLIBDIR})
@@ -501,12 +612,34 @@ target_link_libraries(${PROJECT_NAME}.elf ${LIBS} "-L${CMAKE_CURRENT_LIST_DIR}/e
 target_link_libraries(${PROJECT_NAME}.elf -Wl,-Map=${PROJECT_NAME}.map)
 target_link_libraries(${PROJECT_NAME}.elf -Wl,--print-memory-usage)
 
+set(EXTERNAL_APP_BYPRODUCTS)
+foreach(EXTERNAL_APP_NAME ${EXTAPPLIST})
+    list(APPEND EXTERNAL_APP_BYPRODUCTS
+        ${CMAKE_CURRENT_BINARY_DIR}/${EXTERNAL_APP_NAME}.ppma
+        ${CMAKE_CURRENT_BINARY_DIR}/external_app_${EXTERNAL_APP_NAME}.himg
+    )
+endforeach()
+if(HACKRF_EDGE_PRECISION_RX_SEGMENTED_PPMA_DIAGNOSTIC)
+	list(APPEND EXTERNAL_APP_BYPRODUCTS
+		${CMAKE_CURRENT_BINARY_DIR}/external_app_precision_rx_aux0.himg
+		${CMAKE_CURRENT_BINARY_DIR}/external_app_precision_rx_aux1.himg)
+endif()
+
 add_custom_command(
 	OUTPUT ${PROJECT_NAME}.bin
+	BYPRODUCTS ${EXTERNAL_APP_BYPRODUCTS}
 	COMMAND ${CMAKE_OBJCOPY} -v -O binary ${PROJECT_NAME}.elf ${PROJECT_NAME}.bin --remove-section=.external_app_*
-	COMMAND ${EXPORT_EXTERNAL_APP_IMAGES} ${PROJECT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_OBJCOPY} ${EXTAPPLIST}
-	DEPENDS ${PROJECT_NAME}.elf
-)
+	COMMAND ${EXPORT_EXTERNAL_APP_IMAGES} ${CMAKE_CURRENT_LIST_DIR}/.. ${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_OBJCOPY} ${baseband_BINARY_DIR}/baseband.img ${EXTERNAL_APP_EXPORT_ARGS} ${EXTAPPLIST}
+	${EXTERNAL_APP_VERIFY_COMMAND}
+	DEPENDS
+		${PROJECT_NAME}.elf
+		${baseband_BINARY_DIR}/baseband.img
+			${BASEBAND_RAW_IMAGES}
+			${EXPORT_EXTERNAL_APP_IMAGES}
+			${CMAKE_CURRENT_LIST_DIR}/../tools/external_app_info.py
+			${CMAKE_CURRENT_LIST_DIR}/../tools/prxq0011_cohort_inputs.py
+			${EXTERNAL_APP_VERIFY_DEPENDS}
+	)
 
 add_custom_target(
 	${PROJECT_NAME}

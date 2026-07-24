@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: Copyright 2026 HackRF Edge contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Modified for HackRF Edge in 2026 by HackRF Edge contributors.
+
 set(EXTCPPSRC
 	#afsk_rx   16 byte
 	external/afsk_rx/main.cpp
@@ -381,6 +385,10 @@ set(EXTCPPSRC
   external/signal_hunter/main.cpp
   external/signal_hunter/ui_signal_hunter.cpp
 
+	#precision_rx
+	external/precision_rx/main.cpp
+	external/precision_rx/ui_precision_rx.cpp
+
 
 	#tetra rx
 	external/tetra_rx/main.cpp
@@ -484,6 +492,7 @@ set(EXTAPPLIST
 	hard_reset
 	secplustx
   signal_hunter
+	precision_rx
 	tetra_rx
 )
 
@@ -495,4 +504,3 @@ if(NOT BOARD STREQUAL "PRALINE")
        )
        list(APPEND EXTAPPLIST sdusb)
 endif()
-

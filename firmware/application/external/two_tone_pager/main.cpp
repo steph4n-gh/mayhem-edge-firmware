@@ -36,7 +36,7 @@ __attribute__((section(".external_app.app_two_tone_pager.application_information
     /*.memory_location = */ (uint8_t*)0x00000000,
     /*.externalAppEntry = */ ui::external_app::two_tone_pager::initialize_app,
     /*.header_version = */ CURRENT_HEADER_VERSION,
-    /*.app_version = */ VERSION_MD5,
+    /*.build_fingerprint = */ {},
 
     /*.app_name = */ "2-Tone TX",
     /*.bitmap_data = */ {

@@ -42,7 +42,6 @@
 #include "chprintf.h"
 #include "chqueues.h"
 #include "ui_external_items_menu_loader.hpp"
-#include "ui_flash_utility.hpp"
 #include "untar.hpp"
 #include "ui_widget.hpp"
 #include "file_path.hpp"
@@ -107,14 +106,7 @@ static void cmd_sd_over_usb(BaseSequentialStream* chp, int argc, char* argv[]) {
     (void)argv;
     auto evtd = getEventDispatcherInstance();
     if (!evtd) return;
-    auto top_widget = evtd->getTopWidget();
-    if (!top_widget) return;
-    auto nav = static_cast<ui::SystemView*>(top_widget)->get_navigation_view();
-    if (!nav) return;
-    nav->home(false);
-    std::string appwithpath = "/" + apps_dir.string() + "/";
-    appwithpath += "sdusb.ppma";
-    bool ret = ui::ExternalItemsMenuLoader::run_external_app(*nav, path_from_string8((char*)appwithpath.c_str()));
+    const bool ret = evtd->request_app_start("sdusb");
     if (ret) {
         chprintf(chp, "ok\r\n");
     } else {
@@ -148,17 +140,9 @@ static void cmd_flash(BaseSequentialStream* chp, int argc, char* argv[]) {
 
     auto evtd = getEventDispatcherInstance();
     if (!evtd) return;
-    auto top_widget = evtd->getTopWidget();
-    if (!top_widget) return;
-    auto nav = static_cast<ui::SystemView*>(top_widget)->get_navigation_view();
-    if (!nav) return;
-    nav->home(false);
-
-    // call nav with flash
-    auto open_view = nav->push<ui::FlashUtilityView>();
     chprintf(chp, "Flashing started\r\n");
-    chThdSleepMilliseconds(150);  // to give display some time to paint the screen
-    if (!open_view->flash_firmware(path.native())) {
+    chThdSleepMilliseconds(150);  // let the serial response drain before reset
+    if (!evtd->request_firmware_flash(path.native().c_str())) {
         chprintf(chp, "error\r\n");
     }
 }
@@ -647,31 +631,17 @@ static void cmd_accessibility_readcurr(BaseSequentialStream* chp, int argc, char
 }
 
 static void cmd_appstart(BaseSequentialStream* chp, int argc, char* argv[]) {
-    (void)argc;
-    (void)argv;
     if (argc != 1) {
         chprintf(chp, "Usage: appstart APPCALLNAME");
         return;
     }
+
     auto evtd = getEventDispatcherInstance();
-    if (!evtd) return;
-    auto top_widget = evtd->getTopWidget();
-    if (!top_widget) return;
-    auto nav = static_cast<ui::SystemView*>(top_widget)->get_navigation_view();
-    if (!nav) return;
-    if (nav->StartAppByName(argv[0])) {
-        chprintf(chp, "ok\r\n");
-        return;
-    }
-    // since ext app loader changed, we can just pass the string to it, and it"ll return if started or not.
-    std::string appwithpath = "/" + apps_dir.string() + "/";
-    appwithpath += argv[0];
-    appwithpath += ".ppma";
-    bool ret = ui::ExternalItemsMenuLoader::run_external_app(*nav, path_from_string8((char*)appwithpath.c_str()));
-    if (!ret) {
+    if (!evtd || !evtd->request_app_start(argv[0])) {
         chprintf(chp, "error\r\n");
         return;
     }
+
     chprintf(chp, "ok\r\n");
 }
 
@@ -1172,6 +1142,43 @@ static void cmd_sysinfo(BaseSequentialStream* chp, int argc, char* argv[]) {
         return;
     }
     auto utilisation = get_cpu_utilisation_in_percent();
+#if defined(HACKRF_EDGE_PRECISION_RX_RATE_TRANSACTION_DIAGNOSTIC)
+    chprintf(
+        chp,
+        "M0 heap: %u\r\n"
+        "M0 stack: %u\r\n"
+        "M0 cpu%%: %u\r\n"
+        "M4 heap: %u\r\n"
+        "M4 stack: %u\r\n"
+        "M4 cpu%%: %u\r\n"
+        "PRX DMA: v=13 state=%u rate=%u txn=%u tfail=%u q=%u/3"
+        " qmax=%u miss=%u qdrop=%u reuse=%u errdrop=%u boundary=%u"
+        " qfail=%u\r\n"
+        "uptime: %u\r\n",
+        static_cast<unsigned>(chCoreStatus()),
+        static_cast<unsigned>(get_free_stack_space()),
+        static_cast<unsigned>(utilisation),
+        static_cast<unsigned>(shared_memory.m4_heap_usage),
+        static_cast<unsigned>(shared_memory.m4_stack_usage),
+        static_cast<unsigned>(shared_memory.m4_performance_counter),
+        static_cast<unsigned>(shared_memory.m4_dma_rate_state),
+        static_cast<unsigned>(shared_memory.m4_dma_rate_hz),
+        static_cast<unsigned>(shared_memory.m4_dma_transaction_id),
+        static_cast<unsigned>(
+            precision_rx::dma_telemetry::transition_failure_count(
+                shared_memory.m4_dma_transition_failures)),
+        static_cast<unsigned>(shared_memory.m4_dma_queue_depth),
+        static_cast<unsigned>(shared_memory.m4_dma_queue_high_water),
+        static_cast<unsigned>(shared_memory.m4_dma_missed_lifetime),
+        static_cast<unsigned>(shared_memory.m4_dma_queue_dropped),
+        static_cast<unsigned>(shared_memory.m4_dma_reuse_dropped),
+        static_cast<unsigned>(shared_memory.m4_dma_error_dropped),
+        static_cast<unsigned>(shared_memory.m4_dma_boundary_discarded),
+        static_cast<unsigned>(
+            precision_rx::dma_telemetry::quiesce_failure(
+                shared_memory.m4_dma_transition_failures)),
+        static_cast<unsigned>(chTimeNow() / 1000));
+#else
     std::string info =
         "M0 heap: " + to_string_dec_uint(chCoreStatus()) + "\r\n" +
         "M0 stack: " + to_string_dec_uint((uint32_t)get_free_stack_space()) + "\r\n" +
@@ -1183,6 +1190,7 @@ static void cmd_sysinfo(BaseSequentialStream* chp, int argc, char* argv[]) {
         "uptime: " + to_string_dec_uint(chTimeNow() / 1000) + "\r\n";
 
     fillOBuffer(&((SerialUSBDriver*)chp)->oqueue, (const uint8_t*)info.c_str(), info.length());
+#endif
     return;
 }
 

@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2023 Kyle Reed
+ * Modified for HackRF Edge in 2026 by HackRF Edge contributors.
  *
  * This file is part of PortaPack.
  *
@@ -458,6 +459,15 @@ SCENARIO("It calls on_read_progress while reading.") {
             }
         }
     }
+}
+
+TEST_CASE("It can update a file timestamp") {
+    const FATTimestamp timestamp{
+        .FAT_date = 0x58F1,
+        .FAT_time = 0x7A20,
+    };
+
+    CHECK(file_update_date(u"TEST.BIN", timestamp).ok());
 }
 
 TEST_SUITE_END();

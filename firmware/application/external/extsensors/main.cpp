@@ -36,7 +36,7 @@ __attribute__((section(".external_app.app_extsensors.application_information"), 
     /*.memory_location = */ (uint8_t*)0x00000000,
     /*.externalAppEntry = */ ui::external_app::extsensors::initialize_app,
     /*.header_version = */ CURRENT_HEADER_VERSION,
-    /*.app_version = */ VERSION_MD5,
+    /*.build_fingerprint = */ {},
 
     /*.app_name = */ "ExtSensor",
     /*.bitmap_data = */ {

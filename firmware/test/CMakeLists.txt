@@ -1,4 +1,5 @@
 # Copyright (C) 2023 Bernd Herzog, Kyle Reed
+# Modified for HackRF Edge in 2026 by HackRF Edge contributors.
 #
 # This file is part of PortaPack.
 #
@@ -26,5 +27,50 @@ enable_testing()
 add_subdirectory(application)
 add_subdirectory(baseband)
 
+add_test(
+    NAME spi_image_size_policy_test
+    COMMAND ${CMAKE_COMMAND} -E env PYTHONDONTWRITEBYTECODE=1
+        python3 -m unittest discover
+        -s ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests
+        -p test_spi_image_size_policy.py
+)
+
+add_test(
+    NAME lz4_chunk_packaging_test
+    COMMAND ${CMAKE_COMMAND} -E env PYTHONDONTWRITEBYTECODE=1
+        python3 -m unittest discover
+        -s ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests
+        -p test_lz4_chunk_packaging.py
+)
+
+add_test(
+    NAME external_app_fingerprint_test
+    COMMAND ${CMAKE_COMMAND} -E env PYTHONDONTWRITEBYTECODE=1
+        python3 -m unittest discover
+        -s ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests
+        -p test_external_app_fingerprint.py
+)
+
+add_test(
+    NAME precision_rx_elf_verifier_test
+    COMMAND ${CMAKE_COMMAND} -E env PYTHONDONTWRITEBYTECODE=1
+        python3 -m unittest discover
+        -s ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests
+        -p test_precision_rx_elf_verifier.py
+)
+
+add_test(
+    NAME precision_rx_application_elf_verifier_test
+    COMMAND ${CMAKE_COMMAND} -E env PYTHONDONTWRITEBYTECODE=1
+        python3 -m unittest discover
+        -s ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests
+        -p test_precision_rx_application_elf_verifier.py
+)
+
 add_custom_target(build_tests)
-add_dependencies(build_tests application_test baseband_test)
+add_dependencies(
+    build_tests
+    application_test
+    baseband_test
+    baseband_stream_input_legacy_test
+)

@@ -45,7 +45,12 @@ bool DebugDumpView::debug_dump_func() {
         return false;
     }
     pmem_dump_file.write_line("FW version: " VERSION_STRING);
-    pmem_dump_file.write_line("Ext APPS version req'd: 0x" + to_string_hex(VERSION_MD5));
+    pmem_dump_file.write_line(
+        "Ext APPS fingerprint: 0x" +
+        to_string_hex_array(
+            const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(
+                &__external_app_build_fingerprint)),
+            sizeof(__external_app_build_fingerprint)));
     pmem_dump_file.write_line("GCC version: " + to_string_dec_int(__GNUC__) + "." + to_string_dec_int(__GNUC_MINOR__) + "." + to_string_dec_int(__GNUC_PATCHLEVEL__));
 
     // firmware checksum

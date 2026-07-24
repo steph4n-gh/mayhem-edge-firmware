@@ -32,6 +32,9 @@ class BufferExchange {
    public:
     BufferExchange(CaptureConfig* const config);
     BufferExchange(ReplayConfig* const config);
+#if defined(HACKRF_EDGE_PRECISION_RX_DMA_LEASE_DIAGNOSTIC)
+    __attribute__((noinline, noclone))
+#endif
     ~BufferExchange();
 
     BufferExchange(const BufferExchange&) = delete;
@@ -42,6 +45,10 @@ class BufferExchange {
 #if defined(LPC43XX_M0)
     bool empty() const {
         return fifo_buffers_for_application->is_empty();
+    }
+
+    size_t queued() const {
+        return fifo_buffers_for_application->len();
     }
 
     StreamBuffer* get() {
@@ -82,7 +89,9 @@ class BufferExchange {
     }
 
    private:
-    // CaptureConfig* const config_capture;
+#if defined(HACKRF_EDGE_PRECISION_RX_RATE_TRANSACTION_DIAGNOSTIC)
+    CaptureConfig* config_capture{nullptr};
+#endif
     // ReplayConfig* const config_replay;
     FIFO<StreamBuffer*>* fifo_buffers_for_baseband{nullptr};
     FIFO<StreamBuffer*>* fifo_buffers_for_application{nullptr};
@@ -95,7 +104,14 @@ class BufferExchange {
     } direction{};
 
     void check_fifo_isr() {
-        if (!empty())
+        bool wake = !empty();
+#if defined(HACKRF_EDGE_PRECISION_RX_RATE_TRANSACTION_DIAGNOSTIC)
+        wake = wake ||
+               (direction == CAPTURE && config_capture &&
+                config_capture->application_abort_requested &&
+                config_capture->baseband_producer_sealed);
+#endif
+        if (wake)
             wakeup_isr();
     }
 

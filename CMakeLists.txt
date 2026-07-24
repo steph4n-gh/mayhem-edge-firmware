@@ -1,4 +1,5 @@
 # Copyright 2016 Jared Boone <jared@sharebrained.com>
+# Modified for HackRF Edge in 2026 by HackRF Edge contributors.
 #
 # This file is part of PortaPack.
 #
@@ -58,6 +59,23 @@ else()
     math(EXPR FLASH_BYTES_LIMIT_SIZE "${FLASH_MB_LIMIT_SIZE} * 1024 * 1024")
 endif()
 
+# Optional aggregate image headroom policy.  It is disabled by default so the
+# upstream build keeps accepting every image that fits in the selected flash
+# size.  Release profiles may opt in and choose stricter thresholds.
+option(MAYHEM_AGGREGATE_SIZE_POLICY "Enforce aggregate firmware flash headroom" OFF)
+set(MAYHEM_AGGREGATE_MIN_REMAINING_BYTES "512" CACHE STRING
+    "Minimum aggregate flash bytes that must remain when the policy is enabled")
+set(MAYHEM_AGGREGATE_WARNING_REMAINING_BYTES "16384" CACHE STRING
+    "Emit a maintenance warning below this aggregate flash headroom")
+
+# Keep upstream-compatible LZ4 packaging defaults. Size-constrained release
+# profiles may select a stronger, still format-compatible compressor mode and
+# omit the frame checksum that the on-device raw-block loader never consumes.
+set(MAYHEM_LZ4_COMPRESSION_LEVEL "9" CACHE STRING
+    "LZ4 high-compression level for embedded baseband chunks (1 through 12)")
+option(MAYHEM_LZ4_NO_FRAME_CRC
+    "Omit unused LZ4 frame content checksums from embedded chunks" OFF)
+
 option(USE_CCACHE "Enable ccache, please keep an eye on this because sometimes it's not quite stable and generated unusable binary" OFF)
 
 project(portapack-h1)
@@ -85,13 +103,7 @@ else()
 	set(VERSION_NOHASH "${VERSION}")
 endif()
 
-execute_process(
-	COMMAND bash "-c" "echo ${VERSION} | md5sum | head -c 8"
-	OUTPUT_VARIABLE VERSION_MD5
-)
-set(VERSION_MD5 "0x${VERSION_MD5}")
-
-message("Building version: ${VERSION} MD5: ${VERSION_MD5}")
+message("Building version: ${VERSION}")
 
 set(LICENSE_PATH ${CMAKE_CURRENT_LIST_DIR}/LICENSE)
 set(HARDWARE_PATH ${CMAKE_CURRENT_LIST_DIR}/hardware)

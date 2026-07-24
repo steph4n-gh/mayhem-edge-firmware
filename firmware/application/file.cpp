@@ -124,6 +124,24 @@ File::Result<File::Offset> File::seek(Offset new_position) {
     return {static_cast<File::Offset>(old_position)};
 }
 
+FRESULT File::build_fast_seek_linkmap(
+    DWORD* const table,
+    const DWORD table_entries) {
+#if _USE_FASTSEEK
+    f.cltbl = table;
+    table[0] = table_entries;
+    const auto result = f_lseek(&f, CREATE_LINKMAP);
+    if (result != FR_OK) {
+        f.cltbl = nullptr;
+    }
+    return result;
+#else
+    (void)table;
+    (void)table_entries;
+    return FR_NOT_ENABLED;
+#endif
+}
+
 File::Result<File::Offset> File::truncate() {
     const auto position = f_tell(&f);
     const auto result = f_truncate(&f);
@@ -271,6 +289,28 @@ std::filesystem::path next_filename_matching_pattern(const std::filesystem::path
     return next_name.empty() ? next_name : path / next_name;
 }
 
+#if defined(HACKRF_EDGE_PRECISION_RX_SEGMENTED_PPMA_DIAGNOSTIC)
+std::filesystem::path next_filename_matching_pattern(
+    const std::filesystem::path& filename_pattern,
+    const std::filesystem::path& result_suffix) {
+    const auto ordinal_end =
+        filename_pattern.native().find_last_of(u'?');
+    if (ordinal_end == std::string::npos) return {};
+    auto next = next_filename_matching_pattern(filename_pattern);
+    if (next.empty()) return next;
+
+    /*
+     * next preserves the complete pattern prefix, including its directory.
+     * Trim the wildcard suffix in place so the result does not need a second
+     * filename()/parent_path()/operator/ decomposition on the M0.
+     */
+    auto name = next.native();
+    name.resize(ordinal_end + 1);
+    name += result_suffix.native();
+    return {name};
+}
+#endif
+
 std::vector<std::filesystem::path> scan_root_files(const std::filesystem::path& directory,
                                                    const std::filesystem::path& extension) {
     std::vector<std::filesystem::path> file_list{};
@@ -302,6 +342,21 @@ std::filesystem::filesystem_error rename_file(
     const std::filesystem::path& new_name) {
     return {f_rename(reinterpret_cast<const TCHAR*>(file_path.c_str()), reinterpret_cast<const TCHAR*>(new_name.c_str()))};
 }
+
+#if defined(HACKRF_EDGE_PRECISION_RX_SEGMENTED_PPMA_DIAGNOSTIC)
+bool finish_new_file(
+    File& file,
+    const std::filesystem::path& path,
+    bool contents_complete) {
+    contents_complete =
+        contents_complete && !file.sync().is_valid();
+    file.close();
+    if (!contents_complete) {
+        (void)delete_file(path);
+    }
+    return contents_complete;
+}
+#endif
 
 std::filesystem::filesystem_error copy_file(
     const std::filesystem::path& file_path,

@@ -21,7 +21,7 @@ __attribute__((section(".external_app.app_blackjack.application_information"), u
     (uint8_t*)0x00000000,
     ui::external_app::blackjack::initialize_app,
     CURRENT_HEADER_VERSION,
-    VERSION_MD5,
+    {},
 
     "Blackjack",
     {

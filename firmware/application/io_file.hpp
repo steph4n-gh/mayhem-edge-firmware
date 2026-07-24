@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2016 Jared Boone, ShareBrained Technology, Inc.
+ * Modified for HackRF Edge in 2026 by HackRF Edge contributors.
  *
  * This file is part of PortaPack.
  *
@@ -64,6 +65,7 @@ class FileWriter : public stream::Writer {
     }
 
     File::Result<File::Size> write(const void* const buffer, const File::Size bytes) override;
+    Optional<File::Error> sync() override { return file_.sync(); }
     const File& file() const& { return file_; }
 
    protected:

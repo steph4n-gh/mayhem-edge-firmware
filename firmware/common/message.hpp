@@ -1,6 +1,7 @@
 /*
  * Copyright (C) 2015 Jared Boone, ShareBrained Technology, Inc.
  * Copyright (C) 2016 Furrtek
+ * Modified for HackRF Edge in 2026 by HackRF Edge contributors.
  *
  * This file is part of PortaPack.
  *
@@ -170,6 +171,8 @@ class Message {
         HunterStop = 112,
         TetraBsch = 113,
         TetraDnb = 114,
+        PrecisionRxConfig = 115,
+        PrecisionRxStatus = 116,
         MAX
     };
 
@@ -569,10 +572,31 @@ class CodedSquelchMessage : public Message {
 
 class ShutdownMessage : public Message {
    public:
+#if defined(HACKRF_EDGE_PRECISION_RX_RATE_TRANSACTION_DIAGNOSTIC)
+    enum class Mode : uint32_t {
+        Normal = 0,
+        PrecisionRxFault = 1,
+    };
+
+    constexpr explicit ShutdownMessage(
+        const Mode mode = Mode::Normal)
+        : Message{ID::Shutdown},
+          mode{mode} {
+    }
+
+    const Mode mode;
+#else
     constexpr ShutdownMessage()
         : Message{ID::Shutdown} {
     }
+#endif
 };
+
+#if defined(HACKRF_EDGE_PRECISION_RX_RATE_TRANSACTION_DIAGNOSTIC)
+static_assert(sizeof(ShutdownMessage) == 8);
+#else
+static_assert(sizeof(ShutdownMessage) == 4);
+#endif
 
 class ERTPacketMessage : public Message {
    public:
@@ -804,21 +828,127 @@ class StreamBuffer {
     }
 };
 
+/*
+ * Stable Precision RX sidecar/status payload shared by M4 capture evidence and
+ * the M0 application.  Keep this layout synchronized with the PRX v1 record
+ * format; the authoritative final capture report is retained in the seqlock
+ * below so a status message queued during CaptureThread::stop() is recoverable.
+ */
+struct PrecisionRxSnapshotRecord {
+    uint64_t first_input_tick;
+    uint64_t next_input_tick;
+    uint64_t dropped_input_samples;
+    uint64_t capture_bytes_received;
+    uint64_t capture_bytes_dropped;
+    uint32_t stream_epoch;
+    uint32_t report_sequence;
+    uint32_t continuity_flags;
+    uint32_t capture_continuity_flags;
+    uint32_t metric_quality_flags;
+    uint32_t analysis_stride;
+    uint32_t analyzed_sample_count;
+    uint32_t sampled_clip_count;
+    int32_t mean_i_q8;
+    int32_t mean_q_q8;
+    int32_t rms_dbfs_x10;
+    int32_t robust_rms_dbfs_x10;
+    int32_t peak_dbfs_x10;
+    int32_t carrier_offset_hz_x10;
+    int32_t carrier_delta_hz_per_s_x10;
+    uint32_t coherence_ppm;
+};
+
+static_assert(
+    sizeof(PrecisionRxSnapshotRecord) == 104,
+    "PRX snapshot wire size changed");
+
+#if defined(HACKRF_EDGE_PRECISION_RX_RATE_TRANSACTION_DIAGNOSTIC) || \
+    defined(HACKRF_EDGE_PRECISION_RX_SEGMENTED_PPMA_DIAGNOSTIC)
+enum class PrecisionRxCaptureTerminalReason : uint8_t {
+    Unspecified = 0,
+    TargetReached = 1,
+    StoragePressure = 2,
+    RequestedStop = 3,
+    ConsumerError = 4,
+    InvariantFailure = 5,
+};
+#endif
+
+struct PrecisionRxCaptureEvidence {
+    /* Even when stable; odd while M4 is updating the evidence snapshot. */
+    uint32_t volatile update_sequence{0};
+    bool valid{false};
+#if defined(HACKRF_EDGE_PRECISION_RX_RATE_TRANSACTION_DIAGNOSTIC) || \
+    defined(HACKRF_EDGE_PRECISION_RX_SEGMENTED_PPMA_DIAGNOSTIC)
+    /*
+     * Occupies one byte of the target ABI's existing alignment hole.  M4
+     * latches the reason before publishing the terminal stream sentinel.
+     */
+    PrecisionRxCaptureTerminalReason terminal_reason{
+        PrecisionRxCaptureTerminalReason::Unspecified};
+#endif
+    uint32_t final_stream_epoch{0};
+    uint32_t final_report_sequence{0};
+    uint64_t status_reports_generated{0};
+    uint32_t aggregate_continuity_flags{0};
+    uint32_t aggregate_capture_continuity_flags{0};
+    uint32_t aggregate_metric_quality_flags{0};
+    int32_t minimum_rms_dbfs_x10{-1200};
+    int32_t minimum_robust_rms_dbfs_x10{-1200};
+    int32_t maximum_robust_rms_dbfs_x10{-1200};
+    int32_t maximum_peak_dbfs_x10{-1200};
+    int32_t minimum_carrier_mod_hz_x10{0};
+    int32_t maximum_carrier_mod_hz_x10{0};
+    uint32_t minimum_coherence_ppm{0};
+    uint32_t valid_carrier_report_count{0};
+    /*
+     * OPEN-only shared-SRAM transport.  On the 32-bit target this occupies
+     * the evidence struct's existing four-byte tail padding, so the stable
+     * evidence and CaptureConfig target ABIs do not grow.  Precision RX
+     * snapshots it while rebinding descriptors, then clears it with the
+     * normal evidence initialization before capture begins.
+     */
+    void* supplemental_buffer_data{nullptr};
+};
+
 struct CaptureConfig {
     const size_t write_size;
     const size_t buffer_count;
     uint64_t baseband_bytes_received;
     uint64_t baseband_bytes_dropped;
+    uint64_t baseband_start_input_tick;
+    uint64_t baseband_stop_input_tick;
+    uint64_t baseband_start_dropped_input_samples;
+    uint64_t baseband_stop_dropped_input_samples;
+    bool volatile baseband_producer_sealed;
+    bool volatile application_abort_requested;
+    bool volatile baseband_open_succeeded;
+    /* Fills the target ABI's existing byte before the next pointer. */
+    uint8_t supplemental_buffer_count;
+    /* M4-authored authoritative ring; name retained to preserve the ABI. */
+    PrecisionRxSnapshotRecord* const precision_rx_final_report;
+    PrecisionRxCaptureEvidence precision_rx_evidence;
     FIFO<StreamBuffer*>* fifo_buffers_empty;
     FIFO<StreamBuffer*>* fifo_buffers_full;
 
     constexpr CaptureConfig(
         const size_t write_size,
-        const size_t buffer_count)
+        const size_t buffer_count,
+        PrecisionRxSnapshotRecord* const precision_rx_final_report = nullptr)
         : write_size{write_size},
           buffer_count{buffer_count},
           baseband_bytes_received{0},
           baseband_bytes_dropped{0},
+          baseband_start_input_tick{0},
+          baseband_stop_input_tick{0},
+          baseband_start_dropped_input_samples{0},
+          baseband_stop_dropped_input_samples{0},
+          baseband_producer_sealed{false},
+          application_abort_requested{false},
+          baseband_open_succeeded{false},
+          supplemental_buffer_count{0},
+          precision_rx_final_report{precision_rx_final_report},
+          precision_rx_evidence{},
           fifo_buffers_empty{nullptr},
           fifo_buffers_full{nullptr} {
     }
@@ -828,20 +958,41 @@ struct CaptureConfig {
             return 0;
         } else {
             const size_t percent = baseband_bytes_dropped * 100U / baseband_bytes_received;
-            return std::max(1U, percent);
+            return std::max(size_t{1}, percent);
         }
     }
 };
 
+#if defined(__arm__)
+static_assert(sizeof(PrecisionRxCaptureEvidence) == 0x48U);
+#if defined(HACKRF_EDGE_PRECISION_RX_RATE_TRANSACTION_DIAGNOSTIC) || \
+    defined(HACKRF_EDGE_PRECISION_RX_SEGMENTED_PPMA_DIAGNOSTIC)
+static_assert(
+    offsetof(PrecisionRxCaptureEvidence, terminal_reason) == 0x05U);
+#endif
+static_assert(
+    offsetof(PrecisionRxCaptureEvidence, final_stream_epoch) == 0x08U);
+static_assert(
+    offsetof(PrecisionRxCaptureEvidence, supplemental_buffer_data) == 0x44U);
+static_assert(sizeof(CaptureConfig) == 0x90U);
+static_assert(offsetof(CaptureConfig, baseband_open_succeeded) == 0x3aU);
+static_assert(offsetof(CaptureConfig, supplemental_buffer_count) == 0x3bU);
+static_assert(offsetof(CaptureConfig, precision_rx_final_report) == 0x3cU);
+static_assert(offsetof(CaptureConfig, precision_rx_evidence) == 0x40U);
+#endif
+
 class CaptureConfigMessage : public Message {
    public:
     constexpr CaptureConfigMessage(
-        CaptureConfig* const config)
+        CaptureConfig* const config,
+        bool flush = false)
         : Message{ID::CaptureConfig},
-          config{config} {
+          config{config},
+          flush{flush} {
     }
 
     CaptureConfig* const config;
+    const bool flush;
 };
 
 struct ReplayConfig {
@@ -2009,6 +2160,78 @@ class HunterStopMessage : public Message {
    public:
     constexpr HunterStopMessage()
         : Message{ID::HunterStop} {}
+};
+
+#if defined(HACKRF_EDGE_PRECISION_RX_RATE_TRANSACTION_DIAGNOSTIC)
+namespace precision_rx::rate_control {
+
+/* Reserved values multiplex control and acknowledgement on the existing
+ * 32-bit sample-rate word, preserving the ID 115 eight-byte wire contract. */
+inline constexpr uint32_t request_commit = 0x80000001U;
+inline constexpr uint32_t request_abort = 0x80000002U;
+
+inline constexpr uint32_t ack_configured = 0xC0000001U;
+inline constexpr uint32_t ack_prepared = 0xC0000002U;
+inline constexpr uint32_t ack_committed = 0xC0000003U;
+inline constexpr uint32_t ack_aborted = 0xC0000004U;
+
+inline constexpr uint32_t reject_invalid_rate = 0xE0000001U;
+inline constexpr uint32_t reject_state = 0xE0000002U;
+inline constexpr uint32_t reject_capture_active = 0xE0000003U;
+inline constexpr uint32_t reject_halt_timeout = 0xE0000004U;
+inline constexpr uint32_t reject_arm_timeout = 0xE0000005U;
+inline constexpr uint32_t reject_resume_timeout = 0xE0000006U;
+inline constexpr uint32_t reject_dma_loss = 0xE0000007U;
+
+}  // namespace precision_rx::rate_control
+#endif
+
+class PrecisionRxConfigMessage : public Message {
+   public:
+    constexpr explicit PrecisionRxConfigMessage(uint32_t input_sample_rate_hz = 2'000'000)
+        : Message{ID::PrecisionRxConfig},
+          input_sample_rate_hz{input_sample_rate_hz} {}
+
+#if defined(HACKRF_EDGE_PRECISION_RX_RATE_TRANSACTION_DIAGNOSTIC)
+    /* The M4 writes its acknowledgement before releasing the message slot. */
+    mutable uint32_t input_sample_rate_hz{2'000'000};
+#else
+    uint32_t input_sample_rate_hz{2'000'000};
+#endif
+};
+
+static_assert(
+    sizeof(PrecisionRxConfigMessage) == 8,
+    "Precision RX configuration wire size changed");
+
+class PrecisionRxStatusMessage : public Message {
+   public:
+    constexpr PrecisionRxStatusMessage()
+        : Message{ID::PrecisionRxStatus} {}
+
+    uint32_t stream_epoch{0};
+    uint32_t report_sequence{0};
+    uint32_t continuity_flags{0};
+    uint32_t capture_continuity_flags{0};
+    uint32_t metric_quality_flags{0};
+    uint32_t input_sample_rate_hz{0};
+    uint32_t analysis_stride{1};
+    uint64_t first_input_tick{0};
+    uint64_t next_input_tick{0};
+    uint64_t dropped_input_samples{0};
+    uint32_t analyzed_sample_count{0};
+    uint32_t sampled_clip_count{0};
+    int32_t mean_i_q8{0};
+    int32_t mean_q_q8{0};
+    int32_t rms_dbfs_x10{-1200};
+    int32_t robust_rms_dbfs_x10{-1200};
+    int32_t peak_dbfs_x10{-1200};
+    int32_t carrier_offset_hz_x10{0};
+    int32_t carrier_delta_hz_per_s_x10{0};
+    uint32_t coherence_ppm{0};
+    int8_t gain_advice{0};
+    uint64_t capture_bytes_received{0};
+    uint64_t capture_bytes_dropped{0};
 };
 
 struct TetraBurstMessage : public Message {

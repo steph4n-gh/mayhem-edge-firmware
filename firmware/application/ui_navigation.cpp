@@ -314,8 +314,14 @@ SystemStatusView::SystemStatusView(
     // configure CLKOUT per pmem setting
     portapack::clock_manager.enable_clock_output(pmem::clkout_enabled());
 
-    // force apply of selected sdcard speed override at UI startup
+#if defined(HACKRF_EDGE_SD_SAFE_DEFAULT_SPEED)
+    // Apply 25 MHz and clear any legacy persisted high-speed override.
+    pmem::set_config_sdcard_high_speed_io(false, true);
+#elif !defined(HACKRF_EDGE_SD_CMD6_DIAGNOSTIC)
+    // Force apply of selected SD-card speed override at UI startup. CMD6
+    // diagnostic builds negotiate the bus automatically during card connect.
     pmem::set_config_sdcard_high_speed_io(pmem::config_sdcard_high_speed_io(), false);
+#endif
 
     button_back.id = -1;  // Special ID used by FocusManager
     title.set_style(Theme::getInstance()->bg_dark);

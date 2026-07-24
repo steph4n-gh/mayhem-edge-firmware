@@ -4,6 +4,7 @@
 # Copyright (C) 2015 Jared Boone, ShareBrained Technology, Inc.
 # Copyright (C) 2024 Mark Thompson
 # copyleft 2025 zxkmm
+# Modified for HackRF Edge in 2026 by HackRF Edge contributors.
 #
 # This file is part of PortaPack.
 #
@@ -23,11 +24,13 @@
 # Boston, MA 02110-1301, USA.
 #
 
-import sys
+import argparse
 import os
 from external_app_info import maximum_application_size
 from external_app_info import external_apps_address_start
 from external_app_info import external_apps_address_end
+from spi_image_size_policy import assess_image_size
+from spi_image_size_policy import print_maintenance_warning
 import subprocess
 
 import re
@@ -40,6 +43,32 @@ Usage: <command> <application_path> <baseband_path> <output_path> <spi_size>
        Where paths refer to the .bin files for each component project.
        spi_size is the total size of the target flash (e.g. 1048576).
 """
+
+
+def non_negative_int(value):
+    parsed_value = int(value, 0)
+    if parsed_value < 0:
+        raise argparse.ArgumentTypeError("must be a non-negative integer")
+    return parsed_value
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description=usage_message)
+    parser.add_argument("application_path")
+    parser.add_argument("baseband_path")
+    parser.add_argument("output_path")
+    parser.add_argument("spi_size", type=non_negative_int)
+    parser.add_argument(
+        "--minimum-remaining-bytes",
+        type=non_negative_int,
+        default=None,
+        help="fail if aggregate flash headroom is below this many bytes")
+    parser.add_argument(
+        "--maintenance-warning-bytes",
+        type=non_negative_int,
+        default=None,
+        help="emit a prominent warning below this aggregate flash headroom")
+    return parser.parse_args()
 
 
 def read_image(path):
@@ -167,18 +196,16 @@ def get_gcc_version_from_elf_files_in_giving_path_or_filename_s_path(path):
 
 #^^^^^^^^gcc version check from elf file^^^^^^^^
 
-if len(sys.argv) != 5:
-    print(usage_message)
-    sys.exit(-1)
+args = parse_args()
 
-application_image = read_image(sys.argv[1])
-baseband_image = read_image(sys.argv[2])
-output_path = sys.argv[3]
-spi_size = int(sys.argv[4], 0)
+application_image = read_image(args.application_path)
+baseband_image = read_image(args.baseband_path)
+output_path = args.output_path
+spi_size = args.spi_size
 
 print("\ncheck gcc versions from all elf target\n")
-application_gcc_versions = get_gcc_version_from_elf_files_in_giving_path_or_filename_s_path(sys.argv[1])
-baseband_gcc_versions = get_gcc_version_from_elf_files_in_giving_path_or_filename_s_path(sys.argv[2])
+application_gcc_versions = get_gcc_version_from_elf_files_in_giving_path_or_filename_s_path(args.application_path)
+baseband_gcc_versions = get_gcc_version_from_elf_files_in_giving_path_or_filename_s_path(args.baseband_path)
 
 for itap in application_gcc_versions:
     print(itap)
@@ -237,10 +264,14 @@ for image in images:
     padded_data = image['data'] + (spi_image_default_byte * pad_size)
     spi_image += padded_data
 
-if len(spi_image) > spi_size - 4:
-    raise RuntimeError('SPI flash image size of %d exceeds device size of %d bytes' % (len(spi_image) + 4, spi_size))
+size_assessment = assess_image_size(
+    payload_bytes=len(spi_image),
+    spi_size=spi_size,
+    minimum_remaining_bytes=args.minimum_remaining_bytes,
+    maintenance_warning_bytes=args.maintenance_warning_bytes,
+)
 
-pad_size = spi_size - 4 - len(spi_image)
+pad_size = size_assessment.remaining_bytes
 for i in range(pad_size):
     spi_image += spi_image_default_byte
 
@@ -252,7 +283,7 @@ for i in range(0, len(spi_image), 4):
     checksum += val
     if (val >= external_apps_address_start) and (val < external_apps_address_end) and (
             (val & 0xFFFF) < maximum_application_size):
-        print("WARNING: Possible external code address", hex(val), "at offset", hex(i), "in", sys.argv[3])
+        print("WARNING: Possible external code address", hex(val), "at offset", hex(i), "in", args.output_path)
 
 final_checksum = 0
 checksum = (final_checksum - checksum) & 0xFFFFFFFF
@@ -263,6 +294,8 @@ write_image(spi_image, output_path)
 
 percent_remaining = round(1000 * pad_size / spi_size) / 10;
 print("Space remaining in flash ROM:", pad_size, "bytes (", percent_remaining, "%)")
+if size_assessment.maintenance_warning:
+    print_maintenance_warning(pad_size, args.maintenance_warning_bytes)
 
 
 #^^^^^^^^check if the fw size ok and check external addr leak^^^^^^^^
@@ -283,5 +316,3 @@ if not os.path.exists(flash_py_path):
     import shutil
     print(f"\ncopy {source_file} to {flash_py_path}\n")
     shutil.copy2(source_file, flash_py_path)
-
-

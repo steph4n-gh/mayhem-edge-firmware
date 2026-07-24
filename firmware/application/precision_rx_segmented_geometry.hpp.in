@@ -1,0 +1,51 @@
+/*
+ * SPDX-FileCopyrightText: Copyright 2026 HackRF Edge contributors
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
+ * Generated from external/precision_rx_segmented_geometry.cmake.
+ * This header contributes constants only; it emits no runtime storage.
+ */
+
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+
+constexpr uint32_t precision_rx_segmented_geometry_version =
+    @PRECISION_RX_SEGMENTED_GEOMETRY_VERSION@U;
+constexpr uint32_t precision_rx_m4_tag_word =
+    @PRECISION_RX_SEGMENTED_M4_TAG_WORD@U;
+
+constexpr size_t precision_rx_segmented_main_size =
+    @PRECISION_RX_SEGMENTED_MAIN_SIZE@U;
+constexpr size_t precision_rx_segmented_m4_size =
+    @PRECISION_RX_SEGMENTED_M4_SIZE@U;
+constexpr size_t precision_rx_segmented_aux0_size =
+    @PRECISION_RX_SEGMENTED_AUX0_SIZE@U;
+constexpr size_t precision_rx_segmented_aux1_size =
+    @PRECISION_RX_SEGMENTED_AUX1_SIZE@U;
+constexpr size_t precision_rx_segmented_trailer_size =
+    @PRECISION_RX_SEGMENTED_TRAILER_SIZE@U;
+constexpr size_t precision_rx_segmented_checksum_size =
+    @PRECISION_RX_SEGMENTED_CHECKSUM_SIZE@U;
+constexpr size_t precision_rx_segmented_image_size =
+    @PRECISION_RX_SEGMENTED_IMAGE_SIZE@U;
+constexpr size_t precision_rx_segmented_file_size =
+    @PRECISION_RX_SEGMENTED_FILE_SIZE@U;
+
+constexpr size_t precision_rx_segmented_code_window_size =
+    @PRECISION_RX_SEGMENTED_CODE_WINDOW_SIZE@U;
+constexpr uint32_t precision_rx_segmented_m4_load_address =
+    @PRECISION_RX_SEGMENTED_M4_LOAD_ADDRESS@U;
+constexpr uint32_t precision_rx_segmented_m0_load_address =
+    @PRECISION_RX_SEGMENTED_M0_LOAD_ADDRESS@U;
+constexpr uint32_t precision_rx_segmented_aux0_load_address =
+    @PRECISION_RX_SEGMENTED_AUX0_LOAD_ADDRESS@U;
+constexpr size_t precision_rx_segmented_aux0_max_size =
+    @PRECISION_RX_SEGMENTED_AUX0_MAX_SIZE@U;
+constexpr uint32_t precision_rx_segmented_aux1_load_address =
+    @PRECISION_RX_SEGMENTED_AUX1_LOAD_ADDRESS@U;
+constexpr size_t precision_rx_segmented_aux1_max_size =
+    @PRECISION_RX_SEGMENTED_AUX1_MAX_SIZE@U;
+constexpr uint32_t precision_rx_segmented_shared_memory_end =
+    @PRECISION_RX_SEGMENTED_SHARED_MEMORY_END@U;

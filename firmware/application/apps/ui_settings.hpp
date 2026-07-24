@@ -451,6 +451,21 @@ class SetSDCardView : public View {
         {UI_POS_X_CENTER(20), 90, UI_POS_WIDTH(20), UI_POS_HEIGHT(2)},
         "More Info"};
 
+#if defined(HACKRF_EDGE_SD_CMD6_DIAGNOSTIC)
+    Labels labels{
+        {{UI_POS_X_CENTER(26), 140}, " CMD6 SD BUS (READ ONLY) ", Theme::getInstance()->fg_light->foreground}};
+
+    Text text_sdcard_bus_mode{
+        {UI_POS_X_CENTER(24), 172, UI_POS_WIDTH(24), UI_POS_HEIGHT(1)},
+        "---"};
+#elif defined(HACKRF_EDGE_SD_SAFE_DEFAULT_SPEED)
+    Labels labels{
+        {{UI_POS_X_CENTER(26), 140}, " SAFE SD BUS (READ ONLY) ", Theme::getInstance()->fg_light->foreground}};
+
+    Text text_sdcard_bus_mode{
+        {UI_POS_X_CENTER(24), 172, UI_POS_WIDTH(24), UI_POS_HEIGHT(1)},
+        "---"};
+#else
     // Settings section (bottom half)
     Labels labels{
         // 01234567890123456789012345678
@@ -473,6 +488,7 @@ class SetSDCardView : public View {
     Button button_save{
         {UI_POS_X_CENTER(12) - UI_POS_WIDTH(8), UI_POS_Y_BOTTOM(4), 12 * 8, 32},
         "Save"};
+#endif
 
     Button button_cancel{
         {UI_POS_X_CENTER(12) + UI_POS_WIDTH(8), UI_POS_Y_BOTTOM(4), 12 * 8, 32},

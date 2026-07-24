@@ -23,11 +23,26 @@
 #define __THREAD_WAIT_H__
 
 #include <ch.h>
+#if defined(HACKRF_EDGE_PRECISION_RX_RATE_TRANSACTION_DIAGNOSTIC)
+#include <cstdint>
+#endif
 
 class ThreadWait {
    public:
     int sleep();
+#if defined(HACKRF_EDGE_PRECISION_RX_RATE_TRANSACTION_DIAGNOSTIC)
+    /*
+     * The caller already holds the ChibiOS system lock. This primitive lets a
+     * producer queue be checked and the waiter installed in one critical
+     * section, eliminating the empty-check/sleep race.
+     */
+    int sleep_locked(uint8_t volatile* armed = nullptr);
+#endif
     bool wake_from_interrupt(const int value);
+    void reset() { thread_to_wake = nullptr; }
+#if defined(HACKRF_EDGE_PRECISION_RX_RATE_TRANSACTION_DIAGNOSTIC)
+    bool is_waiting_locked() const { return thread_to_wake != nullptr; }
+#endif
 
    private:
     Thread* thread_to_wake{nullptr};

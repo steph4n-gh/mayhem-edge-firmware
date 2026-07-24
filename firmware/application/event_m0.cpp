@@ -26,6 +26,7 @@
 #include "debug.hpp"
 
 #include "sd_card.hpp"
+#include "file_path.hpp"
 #include "rtc_time.hpp"
 
 #include "message.hpp"
@@ -53,8 +54,9 @@ using namespace gpio_control;
 #include "rffc507x_spi.hpp"
 
 #include <array>
-
 #include "ui_navigation.hpp"
+#include "ui_external_items_menu_loader.hpp"
+#include "ui_flash_utility.hpp"
 
 static int delayed_error = 0;
 
@@ -107,6 +109,65 @@ static MessageHandlerMap message_map;
 Thread* EventDispatcher::thread_event_loop = nullptr;
 bool EventDispatcher::is_running = false;
 bool EventDispatcher::display_sleep = false;
+
+namespace {
+
+using ShellUiAction = bool (*)(ui::Widget*, const void*);
+
+MUTEX_DECL(shell_ui_mutex);
+SEMAPHORE_DECL(shell_ui_done, 0);
+volatile ShellUiAction pending_shell_ui_action = nullptr;
+const void* volatile pending_shell_ui_argument = nullptr;
+volatile bool pending_shell_ui_result = false;
+
+ui::NavigationView* navigation_view(ui::Widget* top_widget) {
+    if (!top_widget)
+        return nullptr;
+
+    return static_cast<ui::SystemView*>(top_widget)->get_navigation_view();
+}
+
+bool start_app_on_event_thread(ui::Widget* top_widget, const void* argument) {
+    const auto* name = static_cast<const char*>(argument);
+    if (!name)
+        return false;
+
+    auto nav = navigation_view(top_widget);
+    if (!nav)
+        return false;
+
+    if (nav->StartAppByName(name))
+        return true;
+
+    std::filesystem::path::string_type app_path = u"/";
+    app_path += apps_dir.native();
+    app_path += u'/';
+    for (; *name != '\0'; ++name) {
+        const auto character = static_cast<uint8_t>(*name);
+        if (character > 0x7f)
+            return false;
+        app_path += static_cast<char16_t>(character);
+    }
+    app_path += u".ppma";
+    return ui::ExternalItemsMenuLoader::run_external_app(
+        *nav, std::filesystem::path{app_path});
+}
+
+bool flash_firmware_on_event_thread(ui::Widget* top_widget, const void* argument) {
+    const auto* path = static_cast<const char16_t*>(argument);
+    if (!path)
+        return false;
+
+    auto nav = navigation_view(top_widget);
+    if (!nav)
+        return false;
+
+    nav->home(false);
+    auto flash_view = nav->push<ui::FlashUtilityView>();
+    return flash_view->flash_firmware(std::filesystem::path::string_type{path});
+}
+
+}  // namespace
 
 EventDispatcher::EventDispatcher(
     ui::Widget* const top_widget,
@@ -430,6 +491,19 @@ void EventDispatcher::handle_shell() {
         }
     }
 
+    const auto shell_ui_action = pending_shell_ui_action;
+    if (shell_ui_action != nullptr) {
+        __DMB();
+        const void* const argument = pending_shell_ui_argument;
+        pending_shell_ui_result = shell_ui_action(top_widget, argument);
+
+        __DMB();
+        pending_shell_ui_argument = nullptr;
+        pending_shell_ui_action = nullptr;
+        __DMB();
+        chSemSignal(&shell_ui_done);
+    }
+
     if (injected_touch_event != nullptr) {
         on_touch_event(*injected_touch_event);
         injected_touch_event = nullptr;
@@ -479,6 +553,38 @@ void EventDispatcher::emulateKeyboard(ui::KeyboardEvent event) {
         chThdSleepMilliseconds(5);
     }
     injected_keyboard_event = nullptr;  // to clean event_mo.cpp, compile warning error : "storing the address of local variable 'event' in 'this_4(D)->injected_keyboard_event' [-Wdangling-pointer=]"
+}
+
+bool EventDispatcher::request_app_start(const char* name) {
+    return request_shell_ui(start_app_on_event_thread, name);
+}
+
+bool EventDispatcher::request_firmware_flash(const char16_t* path) {
+    return request_shell_ui(flash_firmware_on_event_thread, path);
+}
+
+bool EventDispatcher::request_shell_ui(
+    bool (*action)(ui::Widget*, const void*),
+    const void* argument) {
+    if (!action || !argument || !thread_event_loop || !is_running)
+        return false;
+
+    if (chThdSelf() == thread_event_loop)
+        return action(top_widget, argument);
+
+    /* USB and I2C shells share this dispatcher; admit one request at a time. */
+    chMtxLock(&shell_ui_mutex);
+    pending_shell_ui_result = false;
+    pending_shell_ui_argument = argument;
+    __DMB();
+    pending_shell_ui_action = action;
+    __DMB();
+    events_flag(EVT_MASK_SHELL);
+    chSemWait(&shell_ui_done);
+    __DMB();
+    const bool result = pending_shell_ui_result;
+    chMtxUnlock();
+    return result;
 }
 
 void EventDispatcher::on_keyboard_event(ui::KeyboardEvent event) {

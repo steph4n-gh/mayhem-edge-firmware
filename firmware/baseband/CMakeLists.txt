@@ -1,6 +1,7 @@
 #
 # Copyright (C) 2014 Jared Boone, ShareBrained Technology, Inc.
 # Copyright (C) 2016 Furrtek
+# Modified for HackRF Edge in 2026 by HackRF Edge contributors.
 #
 # This file is part of PortaPack.
 #
@@ -288,22 +289,127 @@ include(${RULESPATH}/rules.cmake)
 #######################################################################
 
 add_library(${PROJECT_NAME} OBJECT ${CSRC} ${CPPSRC} ${ASMSRC})
+# Precision RX retains private sixteen-slot capacity. p9 uses eight M4-local
+# and three M0-owned 8 KiB slots; p10 uses nine M4-local and two M0-owned slots
+# with a private compact DMA ring. p11 can lease local capture block eight to
+# form a 16 KiB monitor ring, returning it before capture binds the pool.
+# Every upstream resident image keeps the original eight-slot StreamInput
+# capacity. Compile a second copy of the common M4 objects so this private
+# layout cannot leak into unrelated images or consume their flash budget.
+add_library(baseband_shared_precision_rx OBJECT ${CSRC} ${CPPSRC} ${ASMSRC})
+target_compile_definitions(baseband_shared_precision_rx PRIVATE
+	STREAM_INPUT_BUFFER_COUNT_MAX_LOG2=4
+)
+if(HACKRF_EDGE_M0_SPILL_DIAGNOSTIC)
+	target_compile_definitions(baseband_shared_precision_rx PRIVATE
+		HACKRF_EDGE_M0_SPILL_DIAGNOSTIC=1
+	)
+endif()
+if(HACKRF_EDGE_PRECISION_RX_HYBRID_POOL_DIAGNOSTIC)
+	if(NOT HACKRF_EDGE_M0_SPILL_DIAGNOSTIC)
+		message(FATAL_ERROR "Precision RX hybrid pool requires M0 spill diagnostics")
+	endif()
+	target_compile_definitions(baseband_shared_precision_rx PRIVATE
+		HACKRF_EDGE_PRECISION_RX_HYBRID_POOL_DIAGNOSTIC=1
+	)
+endif()
+if(HACKRF_EDGE_PRECISION_RX_DMA_LEASE_DIAGNOSTIC)
+	if(NOT HACKRF_EDGE_PRECISION_RX_HYBRID_POOL_DIAGNOSTIC)
+		message(FATAL_ERROR "Precision RX DMA leasing requires the p10 hybrid pool")
+	endif()
+	target_compile_definitions(baseband_shared_precision_rx PRIVATE
+		HACKRF_EDGE_PRECISION_RX_DMA_LEASE_DIAGNOSTIC=1
+	)
+endif()
+if(HACKRF_EDGE_PRECISION_RX_RATE_TRANSACTION_DIAGNOSTIC)
+	if(NOT HACKRF_EDGE_PRECISION_RX_DMA_LEASE_DIAGNOSTIC)
+		message(FATAL_ERROR "Precision RX rate transactions require the p11 DMA lease")
+	endif()
+	target_compile_definitions(baseband_shared_precision_rx PRIVATE
+		HACKRF_EDGE_PRECISION_RX_RATE_TRANSACTION_DIAGNOSTIC=1
+	)
+	# p12's queue and transaction state machine must coexist with the M0
+	# external application in the fixed 32 KiB SRAM1 window. Restrict LTO to
+	# this private M4 image so unrelated Mayhem basebands remain byte-stable.
+	# Keep C startup/interrupt objects outside LTO: their reachability includes
+	# inline-assembly and weak-vector relationships not visible to GCC 9's
+	# plugin. The p12 growth is in the C++ control/data path.
+	target_compile_options(baseband_shared_precision_rx PRIVATE
+		$<$<COMPILE_LANGUAGE:C>:-Os>
+		$<$<COMPILE_LANGUAGE:C>:-falign-functions=1>
+		$<$<COMPILE_LANGUAGE:CXX>:-Os>
+		$<$<COMPILE_LANGUAGE:CXX>:-falign-functions=1>
+		$<$<COMPILE_LANGUAGE:CXX>:-flto>
+	)
+endif()
 include_directories(. ${INCDIR})
 
 #######################################################################
 
 set(BASEBAND_IMAGES)
 set(BASEBAND_EXTERNAL_IMAGES)
+set(BASEBAND_RAW_IMAGES)
 
 macro(DeclareTargets chunk_tag name)
 	project("baseband_${name}")
 
 	include(${RULESPATH}/rules.cmake)
 	set_source_files_properties(${MODE_CPPSRC} PROPERTIES COMPILE_FLAGS "${MODE_FLAGS}")
-	add_executable(${PROJECT_NAME}.elf $<TARGET_OBJECTS:baseband_shared> ${MODE_CPPSRC} ${HALSRC} ${PLATFORMSRC})
+	set(BASEBAND_SHARED_TARGET baseband_shared)
+	if("${name}" STREQUAL "precision_rx")
+		set(BASEBAND_SHARED_TARGET baseband_shared_precision_rx)
+	endif()
+	add_executable(${PROJECT_NAME}.elf $<TARGET_OBJECTS:${BASEBAND_SHARED_TARGET}> ${MODE_CPPSRC} ${HALSRC} ${PLATFORMSRC})
+	if("${name}" STREQUAL "flash_utility")
+		# The flash utility is not a real-time DSP path; extend its existing
+		# size optimization to FatFs and the SD platform sources it links.
+		target_compile_options(${PROJECT_NAME}.elf PRIVATE -Os)
+	endif()
 	set_target_properties(${PROJECT_NAME}.elf PROPERTIES LINK_DEPENDS ${LDSCRIPT})
 	add_definitions(${DEFS})
 	target_compile_definitions(${PROJECT_NAME}.elf PUBLIC "-DBASEBAND_${name}")
+	if("${name}" STREQUAL "precision_rx")
+		target_compile_definitions(${PROJECT_NAME}.elf PRIVATE
+			STREAM_INPUT_BUFFER_COUNT_MAX_LOG2=4
+		)
+		if(HACKRF_EDGE_M0_SPILL_DIAGNOSTIC)
+			target_compile_definitions(${PROJECT_NAME}.elf PRIVATE
+				HACKRF_EDGE_M0_SPILL_DIAGNOSTIC=1
+			)
+		endif()
+		if(HACKRF_EDGE_PRECISION_RX_HYBRID_POOL_DIAGNOSTIC)
+			target_compile_definitions(${PROJECT_NAME}.elf PRIVATE
+				HACKRF_EDGE_PRECISION_RX_HYBRID_POOL_DIAGNOSTIC=1
+			)
+		endif()
+		if(HACKRF_EDGE_PRECISION_RX_DMA_LEASE_DIAGNOSTIC)
+			target_compile_definitions(${PROJECT_NAME}.elf PRIVATE
+				HACKRF_EDGE_PRECISION_RX_DMA_LEASE_DIAGNOSTIC=1
+			)
+		endif()
+			if(HACKRF_EDGE_PRECISION_RX_RATE_TRANSACTION_DIAGNOSTIC)
+				target_compile_definitions(${PROJECT_NAME}.elf PRIVATE
+					HACKRF_EDGE_PRECISION_RX_RATE_TRANSACTION_DIAGNOSTIC=1
+				)
+				target_compile_options(${PROJECT_NAME}.elf PRIVATE
+					$<$<COMPILE_LANGUAGE:C>:-Os>
+					$<$<COMPILE_LANGUAGE:C>:-falign-functions=1>
+					$<$<COMPILE_LANGUAGE:CXX>:-Os>
+					$<$<COMPILE_LANGUAGE:CXX>:-falign-functions=1>
+					$<$<COMPILE_LANGUAGE:CXX>:-flto>
+				)
+				# Retain defensive linker roots as well: _port_thread_start
+				# references chThdExit only from inline assembly, and GCC 9's
+				# plugin can otherwise internalize the vector table before the
+				# linker script's KEEP(vectors) rule sees it.
+				target_link_options(${PROJECT_NAME}.elf PRIVATE
+					-Os
+					-flto
+					"LINKER:--undefined=chThdExit"
+					"LINKER:--undefined=_vectors"
+				)
+			endif()
+	endif()
 	include_directories(. ${INCDIR} ${MODE_INCDIR})
 	link_directories(${LLIBDIR})
 	target_link_libraries(${PROJECT_NAME}.elf ${LIBS})
@@ -316,7 +422,7 @@ macro(DeclareTargets chunk_tag name)
 		add_custom_command(
 			OUTPUT ${chunk_tag}.bin ${PROJECT_NAME}.img
 			COMMAND ${CMAKE_OBJCOPY} -O binary ${PROJECT_NAME}.elf ${chunk_tag}.bin
-			COMMAND ${LZ4} -f -9 ${chunk_tag}.bin ${PROJECT_NAME}.lz4
+			COMMAND ${LZ4} ${MAYHEM_LZ4_ARGS} ${chunk_tag}.bin ${PROJECT_NAME}.lz4
 			COMMAND ${MAKE_IMAGE_CHUNK} ${PROJECT_NAME}.lz4 ${chunk_tag} ${PROJECT_NAME}.img
 			DEPENDS ${PROJECT_NAME}.elf ${MAKE_IMAGE_CHUNK}
 			VERBATIM
@@ -337,7 +443,10 @@ macro(DeclareTargets chunk_tag name)
 
 	endif()
 
-
+	# Export the exact raw M4 payload outputs so PPMA generation has file-level
+	# dependencies.  Target ordering alone does not make application.bin stale
+	# when only a baseband payload changes.
+	list(APPEND BASEBAND_RAW_IMAGES ${CMAKE_CURRENT_BINARY_DIR}/${chunk_tag}.bin)
 
 endmacro()
 
@@ -786,6 +895,15 @@ set(MODE_CPPSRC
 DeclareTargets(PTSK time_sink)
 
 
+### Precision RX
+
+set(MODE_CPPSRC
+	proc_precision_rx.cpp
+	precision_rx_metrics.cpp
+)
+DeclareTargets(PRX1 precision_rx)
+
+
 ### Tetra Rx
 
 set(MODE_CPPSRC
@@ -853,7 +971,7 @@ endif()
 set_source_files_properties(${HACKRF_FIRMWARE_BIN_IMAGE} PROPERTIES GENERATED TRUE)
 add_custom_command(
 	OUTPUT hackrf.img
-	COMMAND ${LZ4} -f -9 ${HACKRF_FIRMWARE_BIN_IMAGE} hackrf.lz4
+	COMMAND ${LZ4} ${MAYHEM_LZ4_ARGS} ${HACKRF_FIRMWARE_BIN_IMAGE} hackrf.lz4
 	COMMAND ${MAKE_IMAGE_CHUNK} hackrf.lz4 HRF1 hackrf.img
 	DEPENDS ${HACKRF_FIRMWARE_BIN_IMAGE} hackrf_usb_ram.bin ${MAKE_IMAGE_CHUNK}
 	VERBATIM
@@ -879,8 +997,9 @@ project(baseband)
 add_custom_command(
 	OUTPUT ${PROJECT_NAME}.img
 	COMMAND cat ${BASEBAND_IMAGES} > ${PROJECT_NAME}.img
+	COMMAND python3 ${VERIFY_IMAGE_CHUNKS} ${PROJECT_NAME}.img
 	DEPENDS ${BASEBAND_IMAGES} ${BASEBAND_EXTERNAL_IMAGES}
-	DEPENDS hackrf.img terminator.img
+	DEPENDS hackrf.img terminator.img ${VERIFY_IMAGE_CHUNKS}
 	VERBATIM
 )
 
@@ -888,3 +1007,5 @@ add_custom_target(
 	${PROJECT_NAME}
 	DEPENDS ${PROJECT_NAME}.img
 )
+
+set(BASEBAND_RAW_IMAGES ${BASEBAND_RAW_IMAGES} PARENT_SCOPE)

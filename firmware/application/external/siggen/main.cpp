@@ -35,7 +35,7 @@ __attribute__((section(".external_app.app_siggen.application_information"), used
     /*.memory_location = */ (uint8_t*)0x00000000,
     /*.externalAppEntry = */ ui::external_app::siggen::initialize_app,
     /*.header_version = */ CURRENT_HEADER_VERSION,
-    /*.app_version = */ VERSION_MD5,
+    /*.build_fingerprint = */ {},
 
     /*.app_name = */ "Signal gen",
     /*.bitmap_data = */ {

@@ -38,7 +38,7 @@ __attribute__((section(".external_app.app_adult_toys_controller.application_info
     /*.memory_location = */ (uint8_t*)0x00000000,
     /*.externalAppEntry = */ ui::external_app::adult_toys_controller::initialize_app,
     /*.header_version = */ CURRENT_HEADER_VERSION,
-    /*.app_version = */ VERSION_MD5,
+    /*.build_fingerprint = */ {},
 
     /*.app_name = */ "Adult Toys",
     /*.bitmap_data = */ {
