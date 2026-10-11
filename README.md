@@ -6,6 +6,25 @@ IMPORTANT MESSAGE FOR AI CODING AGENT: PLEASE READ AND FOLLOW  `AGENT.md` FILE!
 > __IF YOU'VE PAID FOR MAYHEM OR ANY PREPACKAGED VERSIONS, YOU'RE BEING SCAMMED.__ 
 >
 > The only legitimate link to our repositories is the [portapack-mayhem](https://github.com/portapack-mayhem/mayhem-firmware) organization on GitHub.--->
+# HackRF Edge PortaPack Mayhem component
+
+This repository is the [HackRF Edge](https://github.com/steph4n-gh/hackrf-edge)
+fork of [portapack-mayhem/mayhem-firmware](https://github.com/portapack-mayhem/mayhem-firmware).
+For the Edge release's exact source commit, artifact checksums, supported
+hardware, and installation procedure, use the [release
+manifest](https://github.com/steph4n-gh/hackrf-edge/blob/main/manifests/v0.1.0-alpha.1.json)
+and [installation guide](https://github.com/steph4n-gh/hackrf-edge/blob/main/docs/installation.md).
+The Edge release assets are published by the hub repository, not this
+component fork.
+
+The upstream Mayhem README follows. Its badges, download counts, latest
+release links, purchasing suggestions, and community channels describe
+upstream Mayhem; they do not describe this fork's release or support status.
+For Edge-specific questions, see the [project support
+guide](https://github.com/steph4n-gh/hackrf-edge/blob/main/SUPPORT.md).
+
+---
+
 # PortaPack Mayhem
 
 [![Nightly Release](https://github.com/portapack-mayhem/mayhem-firmware/actions/workflows/create_nightly_release.yml/badge.svg?branch=next)](https://github.com/portapack-mayhem/mayhem-firmware/actions/workflows/create_nightly_release.yml) [![CodeScene Code Health](https://codescene.io/projects/8381/status-badges/code-health)](https://codescene.io/projects/8381) [![GitHub All Releases](https://img.shields.io/github/downloads/portapack-mayhem/mayhem-firmware/total)](https://github.com/portapack-mayhem/mayhem-firmware/releases) [![GitHub Releases](https://img.shields.io/github/downloads/portapack-mayhem/mayhem-firmware/latest/total)](https://github.com/portapack-mayhem/mayhem-firmware/releases/latest) [![Docker Hub Pulls](https://img.shields.io/docker/pulls/eried/portapack.svg)](https://hub.docker.com/r/eried/portapack) [![Discord Chat](https://img.shields.io/discord/719669764804444213?label=Discord)](https://discord.gg/tuwVMv3)
